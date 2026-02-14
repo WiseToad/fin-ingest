@@ -1,0 +1,8 @@
+#logLevel="DEBUG"
+
+[db]
+host="localhost"
+port=5432
+dbname="fin"
+user="finload"
+password="secret"

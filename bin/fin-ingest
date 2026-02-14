@@ -1,0 +1,41 @@
+#!/usr/bin/env bash
+
+SCRIPT_DIR="$(cd "$(dirname "$(readlink -f "$0")")" && pwd)"
+DEFAULT_VENV_DIR="/opt/fin-ingest/venv"
+
+main()
+{
+    local task="$1"
+    shift
+
+    if [ -z "${task}" ]; then
+        die "Usage: fin-ingest task [args ...]"
+    fi
+
+    local task_py="${SCRIPT_DIR}/task/${task}.py"
+    if [ ! -f ${task_py} ]; then
+        die "Invalid task: ${task}"
+    fi
+
+    if [ -z "${FIN_INGEST_VENV_DIR}" ]; then
+        FIN_INGEST_VENV_DIR="${DEFAULT_VENV_DIR}"
+    fi
+
+    source "${FIN_INGEST_VENV_DIR}/bin/activate" || die
+    export PYTHONPATH="${SCRIPT_DIR}:${PYTHONPATH}"
+
+    python3 "${task_py}" "$@"
+}
+
+log()
+{
+    echo "$@" >&2
+}
+
+die()
+{
+    [ $# -ge 1 ] && log "$@"
+    exit 1
+}
+
+main "$@"

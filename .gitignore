@@ -1,0 +1,5 @@
+/build/
+/local/
+
+/venv/
+__pycache__/
