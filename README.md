@@ -22,7 +22,7 @@ sudo apt install -y xvfb libgtk-3-0 libasound2
 sudo mkdir -p /opt/fin-ingest
 cd /opt/fin-ingest
 
-# TODO: get package here
+wget -q -O - https://github.com/WiseToad/fin-ingest/releases/latest/download/fin-ingest.tar.gz | sudo tar -xzf -
 
 sudo useradd -r -d /opt/fin-ingest -s /usr/sbin/nologin fin-ingest
 sudo chgrp fin-ingest bin/fin-ingest
