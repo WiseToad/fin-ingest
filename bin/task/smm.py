@@ -20,7 +20,6 @@ from db.dbtools import DbParams, dbConnect
 class Category(NamedTuple):
     secondName: str
     productCodes: list[str]
-    currencyTypes: list[int] = None
     priceType: str = None
 
 @ofmethod
@@ -28,7 +27,6 @@ class Product(NamedTuple):
     product_id: str
     product_code: str
     product_name: str
-    currency_type: int
     unit: str
 
 class Price(NamedTuple):
@@ -86,31 +84,20 @@ class Ingestor:
 
     def fetchProducts(self, category: Category) -> list[Product]:
         productCodes = toIterable(category.productCodes)
-        
-        if category.priceType in ("PRICE", None):
-            currencyTypes=category.currencyTypes
-            currencyTypes=toIterable(currencyTypes if currencyTypes is not None else 1)
-        else:
-            currencyTypes=(None,)
 
-        products = []
-        for currencyType in currencyTypes:
-            params = {"second_name": category.secondName}
-            if currencyType is not None:
-                params["currency_type"] = currencyType
+        params = {"second_name": category.secondName, "currency_type": 1}
+        data = self.callApi(self.PRODUCT_LIST_URL, params)
+        self.validateResponse(data)
 
-            data = self.callApi(self.PRODUCT_LIST_URL, params)
-            self.validateResponse(data)
-
-            products.extend(
-                Product.of(p, currency_type=currencyType)
-                for c in data["data"]["category_list"]
-                for p in c["products"]
-                if p["product_code"] in productCodes
-            )
+        products = [
+            Product.of(p)
+            for c in data["data"]["category_list"]
+            for p in c["products"]
+            if p["product_code"] in productCodes
+        ]
 
         productCount = len(products)
-        expectedCount = len(productCodes) * len(currencyTypes)
+        expectedCount = len(productCodes)
         if productCount != expectedCount:
             log.warning(f"Requested {expectedCount} products, but fetched {productCount}")
 
@@ -133,9 +120,9 @@ class Ingestor:
     def fetchPrices(self, product: Product, startDate: date, endDate: date, parser: Callable) -> list[Price]:
         url = self.PRICE_HISTORY_URL.format(product.product_id)
         params = {
-            "currency_type": product.currency_type,
             "begin_date": startDate.isoformat(),
-            "end_date": endDate.isoformat()
+            "end_date": endDate.isoformat(),
+            "currency_type": 1
         }
         data = self.callApi(url, params)
         self.validateResponse(data)
@@ -182,15 +169,10 @@ class Ingestor:
         ]
 
     def dbLoad(self, product: Product, prices: list[Price]) -> None:
-        if product.currency_type is None:
-            assetCode = product.product_code
-        else:
-            assetCode = f"{product.product_code}-{product.unit}" 
-        
-        log.info(f"Loading into DB: {self.MARKET} {assetCode}")
+        log.info(f"Loading into DB: {self.MARKET} {product.product_code}")
 
         with self.conn.cursor() as curs:
-            assetId = dbfin.dbInsertAsset(curs, self.MARKET, assetCode, product.product_name, product.unit, update=True)
+            assetId = dbfin.dbInsertAsset(curs, self.MARKET, product.product_code, product.product_name, product.unit, update=True)
             valueCols = (dbfin.Trades.C, dbfin.Trades.UNIT)
             dbfin.dbInsertTrades(curs, assetId, prices, valueCols, dbfin.AggType.DAILY)
 

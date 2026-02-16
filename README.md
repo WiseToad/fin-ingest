@@ -2,7 +2,7 @@ A set of simple data ingestors for financial analysis.
 
 ## DISCLAIMER
 
-This project was created for private usage in mind. The main goal to push it to this repo was not for distribution, but for preserve it's source code and to leverage version control. So, no effort made to maintain it's docs, to reach smoothness of version upgrades, to adhere to any distribution license, and so on.
+This project was created for private usage in mind. The main goal to push it to this repo was not for distribution, but for preserve it's source code and to leverage version control. So, no effort made to maintain it's docs, to reach smoothness of database schema upgrades, to adhere to any distribution license, and so on.
 
 However, anyone can study or use this project in any way at their own risk.
 

@@ -35,7 +35,7 @@ CREATE TABLE trades (
     v BIGINT,
     unit VARCHAR(15));
 
-ALTER TABLE trades ADD CONSTRAINT trades_uk_01 UNIQUE (asset_id, agg_type, dt);
+ALTER TABLE trades ADD CONSTRAINT trades_uk_01 UNIQUE NULLS NOT DISTINCT (asset_id, agg_type, dt, unit);
 
 CREATE INDEX trades_ix_01 ON trades(related_id);
 
@@ -61,7 +61,7 @@ BEGIN
     RETURN QUERY
     SELECT
         t.id,
-        t.updated,
+		t.updated,
         t.asset_id,
         t.agg_type,
         t.dt,
@@ -69,32 +69,39 @@ BEGIN
         (t.h / r.c)::DECIMAL(20, 4) AS h,
         (t.l / r.c)::DECIMAL(20, 4) AS l,
         (t.c / r.c)::DECIMAL(20, 4) AS c,
-        t.v
+        t.v,
+		t.unit
     FROM trades AS t
-    LEFT JOIN trades AS r
-        ON r.asset_id = rate_id
+    LEFT JOIN LATERAL (
+	    SELECT r.c
+		FROM trades AS r
+		WHERE r.asset_id = rate_id
             AND r.agg_type = 'D'
-            AND r.dt::DATE = t.dt::DATE;
+			AND r.dt <= t.dt
+		ORDER BY r.dt DESC
+		LIMIT 1
+    ) AS r ON TRUE;
 END;
 $$;
 
 
-CREATE OR REPLACE VIEW trades_smm AS
+CREATE OR REPLACE VIEW smm_trades AS
 SELECT
-    t.id,
-    t.asset_id,
-    a.market,
-    a.code AS asset_code,
-    a.name AS asset_name,
-    'USD/oz'::VARCHAR(15) AS asset_unit,
-    t.agg_type,
-    t.dt,
-    (CASE
-        WHEN a.unit LIKE 'yuan/kg' THEN (t.c * 31.1 / 1000)
-        WHEN a.unit LIKE 'yuan/g' THEN (t.c * 31.1)
-    END / 1.13)::DECIMAL(20, 4) AS c_no_vat
+	t.id,
+	t.asset_id,
+	a.market,
+	a.code,
+	a.name,
+	t.agg_type,
+	t.dt,
+	(CASE
+		WHEN t.unit LIKE 'yuan/kg' THEN (t.c * 31.103477 / 1000)
+		WHEN t.unit LIKE 'yuan/g' THEN (t.c * 31.103477)
+	-- excluding VAT, as SMM itself does when converting from CNY to USD
+	END / 1.13)::DECIMAL(20, 4) AS c,
+	'USD/oz'::VARCHAR(15) AS unit
 FROM trades_reduced_by('SMM', 'SMM-EXR-003') AS t
 INNER JOIN assets AS a
-    ON a.id = t.asset_id
-        AND a.market = 'SMM'
-        AND a.unit IN ('yuan/kg', 'yuan/g');
+	ON a.id = t.asset_id
+		AND a.market = 'SMM'
+WHERE t.unit IN ('yuan/kg', 'yuan/g');
