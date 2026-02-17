@@ -18,6 +18,7 @@ class RateValues(NamedTuple):
     dt: datetime
     rateBuy: Decimal
     rateSell: Decimal
+    unit: str = None
 
 class Ingestor:
     PROFILE="sber"
@@ -96,7 +97,7 @@ class Ingestor:
                 wrapper = range["wrapper"]
                 wrapper = self.WRAPPER_ABBR.get(wrapper, wrapper[0:4])
                 subCode = f"{wrapper}-{mass}"
-                values = RateValues(dt, Decimal(range["rateBuy"]), Decimal(range["rateSell"]))
+                values = RateValues(dt, Decimal(range["rateBuy"]), Decimal(range["rateSell"]), mass)
                 rateValues.setdefault(subCode, []).append(values)
         return rateValues
 
@@ -119,18 +120,19 @@ class Ingestor:
         for subCode, values in rateValues.items():
             prefix = f"{isoCode}-{rateType}-{subCode}"
 
-            data = [(v.dt, v.rateBuy) for v in values]
+            data = [(v.dt, v.rateBuy, v.unit) for v in values]
             self.dbLoadAsset(f"{prefix}-BUY", data)
 
-            data = [(v.dt, v.rateSell) for v in values]
+            data = [(v.dt, v.rateSell, v.unit) for v in values]
             self.dbLoadAsset(f"{prefix}-SELL", data)
 
-    def dbLoadAsset(self, assetCode: str, data: list[tuple[datetime, Decimal]]) -> None:
+    def dbLoadAsset(self, assetCode: str, data: list[tuple[datetime, Decimal, str]]) -> None:
         log.info(f"Loading into DB: {self.MARKET} {assetCode}")
 
         with self.conn.cursor() as curs:
             assetId = dbfin.dbInsertAsset(curs, self.MARKET, assetCode)
-            dbfin.dbInsertTrades(curs, assetId, data, dbfin.Trades.C, dbfin.AggType.INTRADAY)
+            valueCols = (dbfin.Trades.C, dbfin.Trades.UNIT)
+            dbfin.dbInsertTrades(curs, assetId, data, valueCols, dbfin.AggType.INTRADAY)
 
 def main() -> int:
     ingestor = Ingestor()

@@ -44,64 +44,90 @@ BEFORE UPDATE ON trades FOR EACH ROW
 EXECUTE FUNCTION on_update();
 
 
-CREATE OR REPLACE FUNCTION trades_reduced_by(market VARCHAR, code VARCHAR)
-RETURNS SETOF trades LANGUAGE 'plpgsql' AS $$
-DECLARE
-    rate_id assets.id%TYPE;
-BEGIN
-    SELECT a.id FROM assets AS a
-    INTO rate_id
-    WHERE a.market = trades_reduced_by.market
-        AND a.code = trades_reduced_by.code;
-
-    IF rate_id IS NULL THEN
-        RAISE EXCEPTION 'No rate found of market % and code %', market, code;
-    END IF;
-
-    RETURN QUERY
-    SELECT
-        t.id,
-		t.updated,
-        t.asset_id,
-        t.agg_type,
-        t.dt,
-        (t.o / r.c)::DECIMAL(20, 4) AS o,
-        (t.h / r.c)::DECIMAL(20, 4) AS h,
-        (t.l / r.c)::DECIMAL(20, 4) AS l,
-        (t.c / r.c)::DECIMAL(20, 4) AS c,
-        t.v,
-		t.unit
-    FROM trades AS t
-    LEFT JOIN LATERAL (
-	    SELECT r.c
-		FROM trades AS r
-		WHERE r.asset_id = rate_id
-            AND r.agg_type = 'D'
-			AND r.dt <= t.dt
-		ORDER BY r.dt DESC
-		LIMIT 1
-    ) AS r ON TRUE;
-END;
+CREATE OR REPLACE FUNCTION get_rate(id BIGINT, dt TIMESTAMP WITH TIME ZONE)
+RETURNS TABLE (
+    rate DECIMAL(20, 4),
+    rate_dt TIMESTAMP WITH TIME ZONE
+)
+LANGUAGE sql AS $$
+    SELECT r.c, r.dt
+    FROM trades AS r
+    WHERE r.asset_id = get_rate.id
+        AND r.agg_type = 'D'
+        AND r.dt <= get_rate.dt
+    ORDER BY r.dt DESC
+    LIMIT 1;
 $$;
 
 
 CREATE OR REPLACE VIEW smm_trades AS
 SELECT
-	t.id,
-	t.asset_id,
-	a.market,
-	a.code,
-	a.name,
-	t.agg_type,
-	t.dt,
-	(CASE
-		WHEN t.unit LIKE 'yuan/kg' THEN (t.c * 31.103477 / 1000)
-		WHEN t.unit LIKE 'yuan/g' THEN (t.c * 31.103477)
-	-- excluding VAT, as SMM itself does when converting from CNY to USD
-	END / 1.13)::DECIMAL(20, 4) AS c,
-	'USD/oz'::VARCHAR(15) AS unit
-FROM trades_reduced_by('SMM', 'SMM-EXR-003') AS t
-INNER JOIN assets AS a
-	ON a.id = t.asset_id
-		AND a.market = 'SMM'
+    t.id,
+    t.asset_id,
+    a.market,
+    a.code,
+    a.name,
+    t.agg_type,
+    t.dt,
+    (CASE
+        WHEN t.unit LIKE 'yuan/kg' THEN (t.c * 31.103477 / 1000 / r.rate)
+        WHEN t.unit LIKE 'yuan/g' THEN (t.c * 31.103477 / r.rate)
+    -- excluding VAT, as SMM itself does when converting from CNY to USD    
+    END / (1 + 0.13))::DECIMAL(20, 4) AS c,
+    'USD/oz'::VARCHAR(15) AS unit,
+    t.c AS c_orig,
+    t.unit AS unit_orig,
+    r.rate,
+    r.rate_dt
+FROM trades AS t
+JOIN assets AS a
+    ON a.id = t.asset_id
+        AND a.market = 'SMM'
+CROSS JOIN (
+    SELECT r.id AS rate_id
+    FROM assets AS r
+    WHERE r.market = 'SMM'
+        AND r.code = 'SMM-EXR-003')
+CROSS JOIN get_rate(rate_id, t.dt) AS r
 WHERE t.unit IN ('yuan/kg', 'yuan/g');
+
+
+CREATE OR REPLACE VIEW sber_trades AS
+WITH t AS (
+    SELECT
+        t.asset_id,
+        DATE_TRUNC('day', t.dt::DATE) AS dt,
+        AVG(t.c)::DECIMAL(20, 4) AS c,
+        t.unit
+    FROM trades AS t
+    WHERE t.agg_type = 'I'
+    GROUP BY 
+        t.asset_id,
+        DATE_TRUNC('day', t.dt::DATE),
+        t.unit
+)
+SELECT
+    NULL::BIGINT AS id,
+    t.asset_id,
+    a.market,
+    a.code,
+    a.name,
+    'D'::VARCHAR(15) AS agg_type,
+    t.dt,
+    (t.c * 31.103477 / t.unit::DECIMAL / r.rate)::DECIMAL(20, 4) AS c,
+    'USD/oz'::VARCHAR(15) AS unit,
+    t.c AS c_orig,
+    t.unit AS unit_orig,
+    r.rate,
+    r.rate_dt
+FROM t
+JOIN assets AS a
+    ON a.id = t.asset_id
+        AND a.market = 'SBER'
+CROSS JOIN (
+    SELECT r.id AS rate_id
+    FROM assets AS r
+    WHERE r.market = 'CBR'
+        AND r.code = 'R01235')
+CROSS JOIN get_rate(rate_id, t.dt) AS r
+WHERE t.unit ~ '^[0-9]+$';

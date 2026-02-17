@@ -51,7 +51,7 @@ def dbConnect(params: DbParams):
         dbname=params.dbname,
         user=params.user,
         password=params.password)
-    
+
     with conn.cursor() as curs:
         curs.execute("SELECT version()")
         log.debug(f"Connected to: {curs.fetchone()[0]}")
@@ -85,7 +85,7 @@ def dbLoadCsv(curs, tableName: str, fileName: str, cols: Iterable[str | ColumnDe
 
         cols = [c.name if isinstance(c, ColumnDef) else c for c in cols]
         curs.copy_from(f, tableName, sep=sep, columns=cols)
-    
+
     log.debug(f"CSV loaded")
 
 def dbMerge(curs,
@@ -112,7 +112,7 @@ def dbMerge(curs,
         insert = ()
     elif mode is not None and mode != MergeMode.MERGE:
         raise Exception(f"Invalid merge mode: {mode}")
-        
+
     if not insert and not update:
         log.debug("Nothing to merge")
         return
@@ -150,7 +150,7 @@ def dbMergeRow(curs,
                key: Iterable[str],
                returning: Iterable[str] = None,
                mode: MergeMode = None) -> Any | None:
-    
+
     log.debug(f"Merging row into: {targetTable}")
 
     targetAlias = "t"
@@ -179,17 +179,14 @@ def dbMergeRow(curs,
         raise Exception(f"Invalid or unsupported merge mode: {mode}")
 
     if returning:
-        rowSet = {col.casefold() for col in row.keys()}
-        row |= {col: "NULL" for col in key if col.casefold() not in rowSet}
-
         sqlReturning = ", ".join(returning)
-        sqlWhere = " AND ".join(f"{targetAlias}.{col} IS NOT DISTINCT FROM {val}" for col, val in row.items())
+        sqlWhere = " AND ".join(f"{targetAlias}.{col} IS NOT DISTINCT FROM {row.get(col)}" for col in key)
 
         sql = (
             f"WITH q AS ({sql} RETURNING {sqlReturning}) " + 
             f"SELECT * FROM q UNION ALL " + 
             f"SELECT {sqlReturning} FROM {targetTable} AS {targetAlias} " +
-            f"WHERE {sqlWhere}")
+            f"WHERE {sqlWhere} AND NOT EXISTS (SELECT NULL FROM q)")
 
     sql += ";"
     log.debug(f"Query: {sql}")

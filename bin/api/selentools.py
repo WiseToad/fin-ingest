@@ -37,8 +37,8 @@ def __initEnv():
 
     # Used by Firefox
     xdgBaseDir = f"{cacheDir}/xdg/{getpass.getuser()}"
-    xdgConfigDir = f"{xdgBaseDir}/config"
-    xdgCacheDir = f"{xdgBaseDir}/cache"
+    xdgConfigDir = f"{xdgBaseDir}/.config"
+    xdgCacheDir = f"{xdgBaseDir}/.cache"
     xdgDownloadDir = f"{xdgBaseDir}/Downloads"
 
     os.environ["XDG_CONFIG_HOME"] = xdgConfigDir
