@@ -60,7 +60,7 @@ LANGUAGE sql AS $$
 $$;
 
 
-CREATE OR REPLACE VIEW smm_trades AS
+CREATE OR REPLACE VIEW metal_trades_smm AS
 SELECT
     t.id,
     t.asset_id,
@@ -73,57 +73,66 @@ SELECT
         WHEN t.unit LIKE 'yuan/kg' THEN (t.c * 31.103477 / 1000 / r.rate)
         WHEN t.unit LIKE 'yuan/g' THEN (t.c * 31.103477 / r.rate)
     -- excluding VAT, as SMM itself does when converting from CNY to USD    
-    END / (1 + 0.13))::DECIMAL(20, 4) AS c,
+    END / (1 + 0.13))::DECIMAL(20, 4) AS price,
     'USD/oz'::VARCHAR(15) AS unit,
-    t.c AS c_orig,
+    t.c AS price_orig,
     t.unit AS unit_orig,
     r.rate,
     r.rate_dt
 FROM trades AS t
 JOIN assets AS a
     ON a.id = t.asset_id
-        AND a.market = 'SMM'
 CROSS JOIN (
     SELECT r.id AS rate_id
     FROM assets AS r
     WHERE r.market = 'SMM'
         AND r.code = 'SMM-EXR-003')
 CROSS JOIN get_rate(rate_id, t.dt) AS r
-WHERE t.unit IN ('yuan/kg', 'yuan/g');
+WHERE a.market = 'SMM'
+    AND a.code ~ '^SMM-(AG|AU)-'
+    AND t.unit IN ('yuan/kg', 'yuan/g');
 
 
-CREATE OR REPLACE VIEW sber_trades AS
-WITH t AS (
+CREATE OR REPLACE VIEW metal_trades_sber AS
+WITH trades_agg AS (
     SELECT
         t.asset_id,
+        a.market,
+        a.code,
+        a.name,
+        'D'::VARCHAR(15) AS agg_type,
         DATE_TRUNC('day', t.dt::DATE) AS dt,
         AVG(t.c)::DECIMAL(20, 4) AS c,
         t.unit
     FROM trades AS t
-    WHERE t.agg_type = 'I'
+    JOIN assets AS a
+        ON a.id = t.asset_id
+    WHERE a.market = 'SBER'
+        AND a.code ~ '^(A99|A98)-'
+        AND t.agg_type = 'I'
     GROUP BY 
         t.asset_id,
+        a.market,
+        a.code,
+        a.name,
         DATE_TRUNC('day', t.dt::DATE),
         t.unit
 )
 SELECT
     NULL::BIGINT AS id,
     t.asset_id,
-    a.market,
-    a.code,
-    a.name,
-    'D'::VARCHAR(15) AS agg_type,
+    t.market,
+    t.code,
+    t.name,
+    t.agg_type,
     t.dt,
-    (t.c * 31.103477 / t.unit::DECIMAL / r.rate)::DECIMAL(20, 4) AS c,
+    (t.c * 31.103477 / t.unit::DECIMAL / r.rate)::DECIMAL(20, 4) AS price,
     'USD/oz'::VARCHAR(15) AS unit,
-    t.c AS c_orig,
+    t.c AS price_orig,
     t.unit AS unit_orig,
     r.rate,
     r.rate_dt
-FROM t
-JOIN assets AS a
-    ON a.id = t.asset_id
-        AND a.market = 'SBER'
+FROM trades_agg AS t
 CROSS JOIN (
     SELECT r.id AS rate_id
     FROM assets AS r
@@ -131,3 +140,53 @@ CROSS JOIN (
         AND r.code = 'R01235')
 CROSS JOIN get_rate(rate_id, t.dt) AS r
 WHERE t.unit ~ '^[0-9]+$';
+
+
+CREATE OR REPLACE VIEW metal_trades_misx AS
+SELECT
+    t.id,
+    t.asset_id,
+    a.market,
+    a.code,
+    a.name,
+    t.agg_type,
+    t.dt,
+    (t.c * 31.103477 / r.rate)::DECIMAL(20, 4) AS price,
+    'USD/oz'::VARCHAR(15) AS unit,
+    t.c AS price_orig,
+    t.unit AS unit_orig,
+    r.rate,
+    r.rate_dt
+FROM trades AS t
+JOIN assets AS a
+    ON a.id = t.asset_id
+CROSS JOIN (
+    SELECT r.id AS rate_id
+    FROM assets AS r
+    WHERE r.market = 'CBR'
+        AND r.code = 'R01235')
+CROSS JOIN get_rate(rate_id, t.dt) AS r
+WHERE a.market = 'MISX'
+    AND a.code ~ '^(SLVRUB|GLDRUB)_';
+
+
+CREATE OR REPLACE VIEW metal_trades_xcec AS
+SELECT
+    t.id,
+    t.asset_id,
+    a.market,
+    a.code,
+    a.name,
+    t.agg_type,
+    t.dt,
+    t.c AS price,
+    'USD/oz'::VARCHAR(15) AS unit,
+    t.c AS price_orig,
+    t.unit AS unit_orig,
+    NULL::DECIMAL AS rate,
+    NULL::TIMESTAMP WITH TIME ZONE AS rate_dt
+FROM trades AS t
+JOIN assets AS a
+    ON a.id = t.asset_id
+WHERE a.market = 'XCEC'
+    AND t.unit IS NULL;
