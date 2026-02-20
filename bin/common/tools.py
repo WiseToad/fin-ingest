@@ -33,7 +33,7 @@ def getPeriodFromArgv(startDiff: int | Callable[[date], date] = None) -> tuple[d
     
     raise ValueError(f"Invalid type of default period length: {startDiff}")
 
-def forEachSafely[T](items: Iterable[T], process: Callable[[T], bool | None]) -> bool:
+def forEachSafely[T](items: Iterable[T], process: Callable[[T], bool | None], breakOnFailure: bool = False) -> bool:
     success = True
     for item in items:
         try:
@@ -44,6 +44,9 @@ def forEachSafely[T](items: Iterable[T], process: Callable[[T], bool | None]) ->
             log.exception(f"Failed to process: {item}")
             success = False
     
+        if breakOnFailure and not success:
+            break
+
     return success
 
 def toIterable(value: Any, scalars: type | Iterable[type] = None) -> Iterable:

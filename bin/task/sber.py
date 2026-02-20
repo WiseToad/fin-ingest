@@ -87,6 +87,7 @@ class Ingestor:
         if message is not None and message not in self.VALID_MSGS:
             raise ValueError(f"Message from response: {message}")
 
+    # used for physical metal trading tariffs (PMR-1)
     def parseApiV2(self, isoCode: str, rateType: str, data: dict[str, Any]) -> dict[str, list[RateValues]]:
         rateValues = {}
         for dt, rangeList in self.preParse(isoCode, rateType, data).items():
@@ -101,6 +102,7 @@ class Ingestor:
                 rateValues.setdefault(subCode, []).append(values)
         return rateValues
 
+    # used for metal account rates (PMR-3 - PMR-7)
     def parseApiV3(self, isoCode: str, rateType: str, data: dict[str, Any]) -> dict[str, list[RateValues]]:
         rateValues = {}
         for dt, rangeList in self.preParse(isoCode, rateType, data).items():

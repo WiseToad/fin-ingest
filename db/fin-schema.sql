@@ -11,7 +11,7 @@ CREATE TABLE assets (
     id BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
     updated TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT CURRENT_TIMESTAMP,
     market VARCHAR(15) NOT NULL,
-    code VARCHAR(25) NOT NULL,
+    code VARCHAR(30) NOT NULL,
     name TEXT NOT NULL,
     unit VARCHAR(15));
 
@@ -190,3 +190,37 @@ JOIN assets AS a
     ON a.id = t.asset_id
 WHERE a.market = 'XCEC'
     AND t.unit IS NULL;
+
+
+CREATE OR REPLACE VIEW metal_trades_goznak AS
+SELECT
+    t.id,
+    t.asset_id,
+    a.market,
+    a.code,
+    a.name,
+    t.agg_type,
+    t.dt,
+    (CASE a.unit
+        WHEN '31.1' then t.c
+        WHEN '15.55' then t.c * 2
+        WHEN '7.78' then t.c * 4
+        WHEN '3.11' then t.c * 10
+        ELSE t.c * 31.103477 / a.unit::DECIMAL
+    END / r.rate)::DECIMAL(20, 4) AS price,
+    'USD/oz'::VARCHAR(15) AS unit,
+    t.c AS price_orig,
+    a.unit AS unit_orig,
+    r.rate,
+    r.rate_dt
+FROM trades AS t
+JOIN assets AS a
+    ON a.id = t.asset_id
+CROSS JOIN (
+    SELECT r.id AS rate_id
+    FROM assets AS r
+    WHERE r.market = 'CBR'
+        AND r.code = 'R01235')
+CROSS JOIN get_rate(rate_id, t.dt) AS r
+WHERE a.market = 'GOZNAK'
+    AND a.unit ~ '^[0-9.]+$';
