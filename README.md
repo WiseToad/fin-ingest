@@ -42,6 +42,7 @@ sudo bash -c "source venv/bin/activate && pip install -r requirements.txt"
 ### Prepare Selenium cache
 
 ```sh
+cd /opt/fin-ingest
 sudo mkdir -p cache
 sudo chmod 2775 cache
 sudo chgrp fin-ingest cache

@@ -51,7 +51,7 @@ RETURNS TABLE (
 )
 LANGUAGE sql AS $$
     SELECT r.c, r.dt
-    FROM trades AS r
+    FROM public.trades AS r
     WHERE r.asset_id = get_rate.id
         AND r.agg_type = 'D'
         AND r.dt <= get_rate.dt
@@ -60,7 +60,8 @@ LANGUAGE sql AS $$
 $$;
 
 
-CREATE OR REPLACE VIEW metal_trades_smm AS
+-- Shanghai Metals Market metal trades
+CREATE MATERIALIZED VIEW metal_trades_smm AS
 SELECT
     t.id,
     t.asset_id,
@@ -79,21 +80,74 @@ SELECT
     t.unit AS unit_orig,
     r.rate,
     r.rate_dt
-FROM trades AS t
-JOIN assets AS a
+FROM public.trades AS t
+JOIN public.assets AS a
     ON a.id = t.asset_id
 CROSS JOIN (
     SELECT r.id AS rate_id
-    FROM assets AS r
+    FROM public.assets AS r
     WHERE r.market = 'SMM'
         AND r.code = 'SMM-EXR-003')
-CROSS JOIN get_rate(rate_id, t.dt) AS r
+CROSS JOIN public.get_rate(rate_id, t.dt) AS r
 WHERE a.market = 'SMM'
     AND a.code ~ '^SMM-(AG|AU)-'
     AND t.unit IN ('yuan/kg', 'yuan/g');
 
 
-CREATE OR REPLACE VIEW metal_trades_sber AS
+-- COMEX metal trades
+CREATE MATERIALIZED VIEW metal_trades_xcec AS
+SELECT
+    t.id,
+    t.asset_id,
+    a.market,
+    a.code,
+    a.name,
+    t.agg_type,
+    t.dt,
+    t.c AS price,
+    'USD/oz'::VARCHAR(15) AS unit,
+    t.c AS price_orig,
+    t.unit AS unit_orig,
+    NULL::DECIMAL AS rate,
+    NULL::TIMESTAMP WITH TIME ZONE AS rate_dt
+FROM public.trades AS t
+JOIN public.assets AS a
+    ON a.id = t.asset_id
+WHERE a.market = 'XCEC'
+    AND t.unit IS NULL;
+
+
+-- Moscow Exchange metal trades
+CREATE MATERIALIZED VIEW metal_trades_misx AS
+SELECT
+    t.id,
+    t.asset_id,
+    a.market,
+    a.code,
+    a.name,
+    t.agg_type,
+    t.dt,
+    (t.c * 31.103477 / r.rate)::DECIMAL(20, 4) AS price,
+    'USD/oz'::VARCHAR(15) AS unit,
+    t.c AS price_orig,
+    t.unit AS unit_orig,
+    r.rate,
+    r.rate_dt
+FROM public.trades AS t
+JOIN public.assets AS a
+    ON a.id = t.asset_id
+CROSS JOIN (
+    SELECT r.id AS rate_id
+    FROM public.assets AS r
+    WHERE r.market = 'CBR'
+        AND r.code = 'R01235')
+CROSS JOIN public.get_rate(rate_id, t.dt) AS r
+WHERE a.market = 'MISX'
+    AND a.code ~ '^(SLVRUB|GLDRUB)_';
+
+
+-- Sberbank metal trades
+CREATE MATERIALIZED VIEW metal_trades_sber AS
 WITH trades_agg AS (
     SELECT
         t.asset_id,
@@ -104,8 +158,8 @@ WITH trades_agg AS (
         DATE_TRUNC('day', t.dt::DATE) AS dt,
         AVG(t.c)::DECIMAL(20, 4) AS c,
         t.unit
-    FROM trades AS t
-    JOIN assets AS a
+    FROM public.trades AS t
+    JOIN public.assets AS a
         ON a.id = t.asset_id
     WHERE a.market = 'SBER'
         AND a.code ~ '^(A99|A98)-'
@@ -135,64 +189,15 @@ SELECT
 FROM trades_agg AS t
 CROSS JOIN (
     SELECT r.id AS rate_id
-    FROM assets AS r
+    FROM public.assets AS r
     WHERE r.market = 'CBR'
         AND r.code = 'R01235')
-CROSS JOIN get_rate(rate_id, t.dt) AS r
+CROSS JOIN public.get_rate(rate_id, t.dt) AS r
 WHERE t.unit ~ '^[0-9]+$';
 
 
-CREATE OR REPLACE VIEW metal_trades_misx AS
-SELECT
-    t.id,
-    t.asset_id,
-    a.market,
-    a.code,
-    a.name,
-    t.agg_type,
-    t.dt,
-    (t.c * 31.103477 / r.rate)::DECIMAL(20, 4) AS price,
-    'USD/oz'::VARCHAR(15) AS unit,
-    t.c AS price_orig,
-    t.unit AS unit_orig,
-    r.rate,
-    r.rate_dt
-FROM trades AS t
-JOIN assets AS a
-    ON a.id = t.asset_id
-CROSS JOIN (
-    SELECT r.id AS rate_id
-    FROM assets AS r
-    WHERE r.market = 'CBR'
-        AND r.code = 'R01235')
-CROSS JOIN get_rate(rate_id, t.dt) AS r
-WHERE a.market = 'MISX'
-    AND a.code ~ '^(SLVRUB|GLDRUB)_';
-
-
-CREATE OR REPLACE VIEW metal_trades_xcec AS
-SELECT
-    t.id,
-    t.asset_id,
-    a.market,
-    a.code,
-    a.name,
-    t.agg_type,
-    t.dt,
-    t.c AS price,
-    'USD/oz'::VARCHAR(15) AS unit,
-    t.c AS price_orig,
-    t.unit AS unit_orig,
-    NULL::DECIMAL AS rate,
-    NULL::TIMESTAMP WITH TIME ZONE AS rate_dt
-FROM trades AS t
-JOIN assets AS a
-    ON a.id = t.asset_id
-WHERE a.market = 'XCEC'
-    AND t.unit IS NULL;
-
-
-CREATE OR REPLACE VIEW metal_trades_goznak AS
+-- Goznak metal trades
+CREATE MATERIALIZED VIEW metal_trades_goznak AS
 SELECT
     t.id,
     t.asset_id,
@@ -213,14 +218,26 @@ SELECT
     a.unit AS unit_orig,
     r.rate,
     r.rate_dt
-FROM trades AS t
-JOIN assets AS a
+FROM public.trades AS t
+JOIN public.assets AS a
     ON a.id = t.asset_id
 CROSS JOIN (
     SELECT r.id AS rate_id
-    FROM assets AS r
+    FROM public.assets AS r
     WHERE r.market = 'CBR'
         AND r.code = 'R01235')
-CROSS JOIN get_rate(rate_id, t.dt) AS r
+CROSS JOIN public.get_rate(rate_id, t.dt) AS r
 WHERE a.market = 'GOZNAK'
     AND a.unit ~ '^[0-9.]+$';
+
+
+CREATE OR REPLACE PROCEDURE refresh_mv()
+LANGUAGE 'plpgsql' SECURITY DEFINER AS $$
+BEGIN
+    REFRESH MATERIALIZED VIEW public.metal_trades_smm;
+    REFRESH MATERIALIZED VIEW public.metal_trades_xcec;
+    REFRESH MATERIALIZED VIEW public.metal_trades_misx;
+    REFRESH MATERIALIZED VIEW public.metal_trades_sber;
+    REFRESH MATERIALIZED VIEW public.metal_trades_goznak;
+END;
+$$;
