@@ -37,11 +37,36 @@ CREATE TABLE trades (
 
 ALTER TABLE trades ADD CONSTRAINT trades_uk_01 UNIQUE NULLS NOT DISTINCT (asset_id, agg_type, dt, unit);
 
-CREATE INDEX trades_ix_01 ON trades(related_id);
-
 CREATE TRIGGER on_tradess_update
 BEFORE UPDATE ON trades FOR EACH ROW
 EXECUTE FUNCTION on_update();
+
+
+CREATE MATERIALIZED VIEW latest_trade_ids AS
+SELECT DISTINCT ON (asset_id, agg_type, unit) id
+FROM public.trades
+ORDER BY asset_id, agg_type, unit, dt DESC;
+
+
+CREATE MATERIALIZED VIEW daily_prices AS
+WITH agg AS (
+    SELECT DISTINCT ON (asset_id, dt::DATE, unit)
+        id, updated, asset_id, dt, c AS price, unit
+    FROM public.trades
+    WHERE agg_type = 'I'
+    ORDER BY asset_id, dt::DATE, unit, dt DESC
+),
+daily AS (
+    SELECT id, updated, asset_id, dt, c AS price, unit
+    FROM public.trades
+    WHERE agg_type = 'D'
+)
+SELECT * FROM agg
+UNION ALL
+SELECT * FROM daily;
+
+CREATE UNIQUE INDEX daily_prices_pkey ON daily_prices(id);
+CREATE UNIQUE INDEX daily_prices_uk_01 ON daily_prices(asset_id, dt, unit) NULLS NOT DISTINCT;
 
 
 CREATE OR REPLACE FUNCTION to_price_in_oz(price DECIMAL, grams DECIMAL)
@@ -73,6 +98,7 @@ LANGUAGE sql AS $$
 $$;
 
 
+-- Metal assets
 CREATE VIEW metal_assets AS
 WITH a AS (
     SELECT a.*,
@@ -113,6 +139,37 @@ WITH a AS (
 )
 SELECT id, updated, market, code, name, metal, unit
 FROM a WHERE metal IS NOT NULL;
+
+
+-- Metal bar prices
+CREATE MATERIALIZED VIEW bar_prices AS
+SELECT
+    p.id,
+    p.asset_id,
+    a.market,
+    a.code,
+    a.name,
+    a.metal,
+    UPPER(REGEXP_REPLACE(a.code, '^.+-([^-]+)$', '\1')) AS dir,
+    p.dt,
+    p.price,
+    (p.price / COALESCE(p.unit, a.unit)::DECIMAL)::DECIMAL(20, 4) AS price_g,
+    COALESCE(p.unit, a.unit)::DECIMAL AS grams
+FROM public.daily_prices AS p
+JOIN public.metal_assets AS a
+    ON a.id = p.asset_id
+WHERE a.market IN ('SBER', 'GOZNAK')
+    AND COALESCE(p.unit, a.unit) ~ '^[0-9.]+$'
+    AND p.price > 0;
+
+CREATE UNIQUE INDEX bar_prices_pkey ON bar_prices(id);
+CREATE UNIQUE INDEX bar_prices_uk_01 ON bar_prices(asset_id, dt, grams) NULLS NOT DISTINCT;
+
+-- Latest metal bar prices
+CREATE VIEW latest_bar_prices AS
+SELECT p.*
+FROM public.bar_prices AS p
+JOIN public.latest_trade_ids AS l ON l.id = p.id;
 
 
 -- Shanghai Metals Market metal trades
@@ -295,45 +352,18 @@ UNION ALL
 SELECT * FROM public.metal_trades_goznak;
 
 
--- Latest values
-CREATE MATERIALIZED VIEW latest_trades AS
-SELECT DISTINCT ON (asset_id, agg_type, unit) *
-FROM public.trades AS t
-ORDER BY asset_id, agg_type, unit, dt DESC;
-
-
--- Latest metal bar trades
-CREATE VIEW latest_bar_trades AS
-SELECT
-    t.id,
-    t.asset_id,
-    a.market,
-    a.code,
-    a.name,
-    a.metal,
-    UPPER(REGEXP_REPLACE(a.code, '^.+-([^-]+)$', '\1')) AS dir,
-    t.agg_type,
-    t.dt,
-    t.c AS price,
-    (t.c / COALESCE(t.unit, a.unit)::DECIMAL)::DECIMAL(20, 4) AS price_g,
-    COALESCE(t.unit, a.unit)::DECIMAL AS grams
-FROM public.latest_trades AS t
-JOIN public.metal_assets AS a
-    ON a.id = t.asset_id
-WHERE a.market IN ('SBER', 'GOZNAK')
-    AND COALESCE(t.unit, a.unit) ~ '^[0-9.]+$'
-    AND t.c > 0;
-
-
 CREATE OR REPLACE PROCEDURE refresh_mv()
 LANGUAGE 'plpgsql' SECURITY DEFINER AS $$
 BEGIN
+    REFRESH MATERIALIZED VIEW public.latest_trade_ids;
+
+    REFRESH MATERIALIZED VIEW public.daily_prices;
+    REFRESH MATERIALIZED VIEW public.bar_prices;
+
     REFRESH MATERIALIZED VIEW public.metal_trades_smm;
     REFRESH MATERIALIZED VIEW public.metal_trades_xcec;
     REFRESH MATERIALIZED VIEW public.metal_trades_misx;
     REFRESH MATERIALIZED VIEW public.metal_trades_sber;
     REFRESH MATERIALIZED VIEW public.metal_trades_goznak;
-    
-    REFRESH MATERIALIZED VIEW public.latest_trades;
 END;
 $$;
