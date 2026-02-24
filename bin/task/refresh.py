@@ -23,8 +23,9 @@ def main() -> int:
 def refresh(conn: Any) -> None:
     log.info("Refreshing materialized views")
 
-    with conn.cursor() as curs:
-        curs.execute("CALL refresh_mv();")
+    with conn:
+        with conn.cursor() as curs:
+            curs.execute("CALL refresh_mv();")
 
 if __name__ == "__main__":
     exit(main())
