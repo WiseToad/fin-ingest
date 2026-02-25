@@ -3,16 +3,19 @@ import logging as log
 from typing import Any, Iterable, Callable
 from datetime import date, timedelta
 
-def getDateFromArgv() -> date:
+def getDateFromArgv(defaultDate: date = None) -> date:
     if len(sys.argv) > 2:
         log.warning(f"Extra command line args ignored: {sys.argv[2:]}")
 
     if len(sys.argv) >= 2:
         return date.fromisoformat(sys.argv[1])
 
-    return date.today()
+    if defaultDate is None:
+        return date.today()
 
-def getPeriodFromArgv(startDiff: int | Callable[[date], date] = None) -> tuple[date, date]:
+    return defaultDate
+
+def getPeriodFromArgv(defaultStart: date = None, defaultEnd: date = None) -> tuple[date, date]:
     if len(sys.argv) > 3:
         log.warning(f"Extra command line args ignored: {sys.argv[3:]}")
 
@@ -23,15 +26,12 @@ def getPeriodFromArgv(startDiff: int | Callable[[date], date] = None) -> tuple[d
         d = date.fromisoformat(sys.argv[1])
         return d, d
 
-    d = date.today()
-    if startDiff is None:
-        return d, d
-    if isinstance(startDiff, int):
-        return (d - timedelta(days=startDiff)), d
-    if isinstance(startDiff, Callable):
-        return startDiff(d), d
-    
-    raise ValueError(f"Invalid type of default period length: {startDiff}")
+    if defaultStart is None:
+        defaultStart = date.today()
+    if defaultEnd is None:
+        defaultEnd = defaultStart
+
+    return defaultStart, defaultEnd
 
 def forEachSafely[T](items: Iterable[T], process: Callable[[T], bool | None], breakOnFailure: bool = False) -> bool:
     success = True

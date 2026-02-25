@@ -1,7 +1,7 @@
 import logging as log
 from typing import Any
 from typing import NamedTuple
-from datetime import datetime, date
+from datetime import datetime, date, timedelta
 from decimal import Decimal
 from collections import defaultdict
 
@@ -31,7 +31,8 @@ class Ingestor:
         initLogging(config.get("logLevel"))
 
     def run(self) -> bool:
-        startDate, endDate = getPeriodFromArgv(10)
+        tomorrow = date.today() + timedelta(days=1)
+        startDate, endDate = getPeriodFromArgv(tomorrow - timedelta(days=10), tomorrow)
 
         self.conn = dbConnect(DbParams.of(config["db"]))
         try:

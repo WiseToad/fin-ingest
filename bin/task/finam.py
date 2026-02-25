@@ -54,7 +54,8 @@ class Ingestor:
         initLogging(config.get("logLevel"))
 
     def run(self) -> bool:
-        startDate, endDate = getPeriodFromArgv(10)
+        today = date.today()
+        startDate, endDate = getPeriodFromArgv(today - timedelta(days=10), today)
 
         self.conn = dbConnect(DbParams.of(config["db"]))
         try:

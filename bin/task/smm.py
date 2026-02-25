@@ -61,7 +61,8 @@ class Ingestor:
         }
 
     def run(self) -> bool:
-        startDate, endDate = getPeriodFromArgv(minusMonth)
+        today = date.today()
+        startDate, endDate = getPeriodFromArgv(minusMonth(today), today)
 
         self.conn = dbConnect(DbParams.of(config["db"]))
         try:
