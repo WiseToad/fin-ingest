@@ -21,6 +21,7 @@ class Trades:
 
 class AggType:
     INTRADAY = "I"
+    SNAPSHOT = "S"
     DAILY = "D"
     OPEN = "O" # for balance, etc
     CLOSE = "C" # for balance, etc

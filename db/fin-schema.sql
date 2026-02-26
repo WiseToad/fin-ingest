@@ -135,15 +135,19 @@ WITH a AS (
                     WHEN 'METAL1' THEN 'Gold'
                     WHEN 'METAL2' THEN 'Silver'
                 END
+            WHEN 'GOZNAK' THEN
+                CASE REGEXP_SUBSTR(a.code, '^[^-]+')
+                    WHEN 'gold' THEN 'Gold'
+                    WHEN 'silver' THEN 'Silver'
+                END
             WHEN 'SBER' THEN
                 CASE REGEXP_SUBSTR(a.code, '^[^-]+')
                     WHEN 'A98' THEN 'Gold'
                     WHEN 'A99' THEN 'Silver'
                 END
-            WHEN 'GOZNAK' THEN
+            WHEN 'AVANGARD' THEN
                 CASE REGEXP_SUBSTR(a.code, '^[^-]+')
                     WHEN 'gold' THEN 'Gold'
-                    WHEN 'silver' THEN 'Silver'
                 END
         END::VARCHAR(15) AS metal
     FROM public.assets AS a
@@ -151,7 +155,7 @@ WITH a AS (
             WHEN 'SMM' THEN a.code ~ '^SMM-(AG|AU)-'
             WHEN 'MISX' THEN a.code ~ '^(SLVRUB|GLDRUB)_'
             WHEN 'CBR' THEN a.code ~ '^METAL'
-            ELSE a.market IN ('XCEC', 'SBER', 'GOZNAK')
+            ELSE a.market IN ('XCEC', 'GOZNAK', 'SBER', 'AVANGARD')
     	END
 )
 SELECT id, updated, market, code, name, metal, unit
@@ -175,7 +179,7 @@ SELECT
 FROM public.daily_prices AS p
 JOIN public.metal_assets AS a
     ON a.id = p.asset_id
-WHERE a.market IN ('SBER', 'GOZNAK')
+WHERE a.market IN ('GOZNAK', 'SBER', 'AVANGARD')
     AND COALESCE(p.unit, a.unit) ~ '^[0-9.]+$'
     AND p.price > 0;
 
@@ -279,8 +283,8 @@ CROSS JOIN (
 CROSS JOIN public.get_rate(rate_id, p.dt) AS r
 WHERE a.market = 'CBR';
 
--- Sberbank metal bar prices
-CREATE OR REPLACE VIEW metal_prices_sber AS
+-- Goznak, Sberbank, Avangard metal bar prices
+CREATE OR REPLACE VIEW metal_prices_ru AS
 SELECT
     p.id,
     p.asset_id,
@@ -289,7 +293,7 @@ SELECT
     a.name,
     a.metal,
     p.dt,
-    (to_price_in_oz(p.price, p.unit::DECIMAL) / r.rate)::DECIMAL(20, 4) AS price_oz
+    (to_price_in_oz(p.price, COALESCE(p.unit, a.unit)::DECIMAL) / r.rate)::DECIMAL(20, 4) AS price_oz
 FROM public.daily_prices AS p
 JOIN public.metal_assets AS a
     ON a.id = p.asset_id
@@ -299,32 +303,10 @@ CROSS JOIN (
     WHERE r.market = 'CBR'
         AND r.code = 'R01235')
 CROSS JOIN public.get_rate(rate_id, p.dt) AS r
-WHERE a.market = 'SBER'
-    AND p.unit ~ '^[0-9.]+$'
+WHERE a.market IN ('GOZNAK', 'SBER', 'AVANGARD')
+    AND COALESCE(p.unit, a.unit) ~ '^[0-9.]+$'
     AND p.price > 0;
 
--- Goznak metal bar prices
-CREATE OR REPLACE VIEW metal_prices_goznak AS
-SELECT
-    p.id,
-    p.asset_id,
-    a.market,
-    a.code,
-    a.name,
-    a.metal,
-    p.dt,
-    (to_price_in_oz(p.price, a.unit::DECIMAL) / r.rate)::DECIMAL(20, 4) AS price_oz
-FROM public.daily_prices AS p
-JOIN public.metal_assets AS a
-    ON a.id = p.asset_id
-CROSS JOIN (
-    SELECT r.id AS rate_id
-    FROM public.assets AS r
-    WHERE r.market = 'CBR'
-        AND r.code = 'R01235')
-CROSS JOIN public.get_rate(rate_id, p.dt) AS r
-WHERE a.market = 'GOZNAK'
-    AND a.unit ~ '^[0-9.]+$';
 
 -- All metal prices
 CREATE VIEW metal_prices AS
@@ -336,9 +318,7 @@ SELECT * FROM public.metal_prices_misx
 UNION ALL
 SELECT * FROM public.metal_prices_cbr
 UNION ALL
-SELECT * FROM public.metal_prices_sber
-UNION ALL
-SELECT * FROM public.metal_prices_goznak;
+SELECT * FROM public.metal_prices_ru;
 
 
 CREATE OR REPLACE PROCEDURE refresh_mv()
