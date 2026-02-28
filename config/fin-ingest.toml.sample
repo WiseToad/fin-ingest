@@ -6,3 +6,10 @@ port=5432
 dbname="fin"
 user="finload"
 password="secret"
+
+[acc-db]
+host="localhost"
+port=5432
+dbname="acc"
+user="accload"
+password="secret"

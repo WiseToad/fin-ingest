@@ -1,6 +1,5 @@
 import logging as log
 import httpx
-import json
 import re
 from typing import Any
 from typing import NamedTuple
@@ -13,6 +12,8 @@ from common.logtools import initLogging
 from common.dtotools import ofmethod
 from common.tools import getPeriodFromArgv, forEachSafely, toIterable
 from common.datetools import dateToDt, MOSCOW_TZ
+
+from api.finamapi import FinamApi
 
 import db.dbfin as dbfin
 from db.dbtools import DbParams, dbConnect
@@ -40,14 +41,10 @@ class Bar(NamedTuple):
 class Ingestor:
     PROFILE = "finam"
 
-    API_BASE_URL = "https://api.finam.ru/v1"
-
     TIME_FRAME = "TIME_FRAME_D"
 
     conn: Any
-    http: httpx.Client
-
-    jwtToken: str = None
+    finamApi: FinamApi
 
     def __init__(self):
         initConfig(self.PROFILE)
@@ -57,10 +54,13 @@ class Ingestor:
         today = date.today()
         startDate, endDate = getPeriodFromArgv(today - timedelta(days=10), today)
 
+        with open(config["tokenFile"], "r") as f:
+            token = f.readline()
+
         self.conn = dbConnect(DbParams.of(config["db"]))
         try:
             with httpx.Client(http2=True) as http:
-                self.http = http
+                self.finamApi = FinamApi(http, token)
                 return self.process(startDate, endDate)
         finally:
             self.conn.close()
@@ -125,7 +125,7 @@ class Ingestor:
         return foundAssets.values()
 
     def fetchAssets(self) -> list[Asset]:
-        data = self.callApi("assets", None)
+        data = self.finamApi.get("assets", None)
         return [Asset.of(a) for a in data["assets"]]
 
     def fetchBars(self, symbol: str, startDate: date, endDate: date, timeFrame: str) -> list[Bar]:
@@ -139,7 +139,7 @@ class Ingestor:
             "timeframe": timeFrame
         }
 
-        data = self.callApi(url, params)
+        data = self.finamApi.get(url, params)
 
         return [
             Bar(timestamp=datetime.fromisoformat(b["timestamp"]),
@@ -150,53 +150,6 @@ class Ingestor:
                 volume=Decimal(b["volume"]["value"]))
             for b in data["bars"]
         ]
-
-    def callApi(self, url: str, params: dict[str, Any]) -> Any:
-        url = f"{self.API_BASE_URL}/{url}"
-        response = self.tryWithAuth(url, params)
-        response.raise_for_status()
-        return json.loads(response.text)
-
-    def tryWithAuth(self, url: str, params: dict[str, Any]) -> httpx.Response:
-        response = self.callWithAuth(url, params)
-
-        if response.status_code == 401:
-            log.debug(f"Unauthorized, trying to recover")
-            return self.callWithAuth(url, params, True)
-
-        if response.status_code == 500:
-            try:
-                data = json.loads(response.text)
-                code = data["code"]
-            except (json.JSONDecodeError, KeyError) as e:
-                log.warning(f"Failed to recover after HTTP 500: {e}")
-                return response
-
-            if code == 13:
-                log.debug(f"Token error: {data.get("message")}")
-                return self.callWithAuth(url, params, True)
-
-        return response
-
-    def callWithAuth(self, url: str, params: dict[str, Any], renewToken: bool = False) -> httpx.Response:
-        if not self.jwtToken or renewToken:
-            self.updateToken()
-
-        return self.http.get(url, params=params, headers={"Authorization": self.jwtToken})
-
-    def updateToken(self) -> None:
-        log.debug("Updating token")
-
-        tokenFile = config["tokenFile"]
-        with open(tokenFile, "r") as f:
-            token = f.readline()
-
-        url = f"{self.API_BASE_URL}/sessions"
-        response = self.http.post(url, json={"secret": token})
-        response.raise_for_status()
-        
-        data = json.loads(response.text)
-        self.jwtToken = data["token"]
 
     def dbLoad(self, asset: Asset, bars: list[Bar]) -> None:
         log.info(f"Loading into DB: {asset.mic} {asset.ticker}")

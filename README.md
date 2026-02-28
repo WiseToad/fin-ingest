@@ -58,7 +58,7 @@ Just basic guidelines given. For details, see source code.
 
 ### Basic configuration
 
-- Configure DB connection in `config/fin-ingest.toml` file.
+- Configure DB connections in `config/fin-ingest.toml` file.
 - Add config files into `config/task` directory for specific tasks, located in `bin/task`.
 - Configure systemd units and timers to setup periodic task schedule.
 

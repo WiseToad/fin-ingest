@@ -6,7 +6,7 @@ from db.dbtools import dbTempTable, dbLoadData, dbMerge, dbMergeRow
 
 class Assets:
     MARKET = ColumnDef("MARKET", DbTypes.VARCHAR(15))
-    CODE = ColumnDef("CODE", DbTypes.VARCHAR(25))
+    CODE = ColumnDef("CODE", DbTypes.VARCHAR(30))
     NAME = ColumnDef("NAME", DbTypes.VARCHAR)
     UNIT = ColumnDef("UNIT", DbTypes.VARCHAR(15))
 

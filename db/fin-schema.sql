@@ -46,7 +46,6 @@ CREATE TABLE trades (
 -- M1, M15, ... - values of interval in minutes, 15 minutes, etc.
 -- H - hourly
 
-
 ALTER TABLE trades ADD CONSTRAINT trades_uk_01 UNIQUE NULLS NOT DISTINCT (asset_id, agg_type, dt, unit);
 
 CREATE TRIGGER on_tradess_update

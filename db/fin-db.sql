@@ -1,3 +1,5 @@
+-- In order to apply the commands below, use console client (psql)
+
 CREATE USER fin WITH PASSWORD 'secret';
 CREATE DATABASE fin OWNER fin;
 GRANT ALL PRIVILEGES ON DATABASE fin TO fin;

@@ -1,32 +1,19 @@
 import logging as log
-import requests
-import ssl
 import locale
 import re
 from typing import Any
 from datetime import datetime
 from decimal import Decimal
 from html.parser import HTMLParser
-from requests.adapters import HTTPAdapter
-from urllib3.poolmanager import PoolManager
 
 from common.config import config, initConfig
 from common.logtools import initLogging
 from common.tools import forEachSafely
 
+from api.legacyssl import getLegacySession
+
 import db.dbfin as dbfin
 from db.dbtools import DbParams, dbConnect
-
-class LegacyRenegotiationAdapter(HTTPAdapter):
-    def init_poolmanager(self, connections, maxsize, block=False, **pool_kwargs):
-        self._pool_connections = connections
-        self._pool_maxsize = maxsize
-        self._pool_block = block
-
-        ctx = ssl.create_default_context()
-        ctx.options |= ssl.OP_LEGACY_SERVER_CONNECT
-
-        self.poolmanager = PoolManager(num_pools=connections, maxsize=maxsize, block=block, ssl_context=ctx)
 
 class Parser(HTMLParser):
     def __init__(self, tableId: str):
@@ -101,8 +88,7 @@ class Ingestor:
         return forEachSafely(tables, lambda table: self.parseTable(html, table))
 
     def fetchHtml(self) -> str:
-        session = requests.Session()
-        session.mount("https://", LegacyRenegotiationAdapter())
+        session = getLegacySession()
 
         headers = {"User-Agent": "Mozilla/5.0 (X11; Linux x86_64; rv:144.0) Gecko/20100101 Firefox/144.0"}
         response = session.get(self.PAGE_URL, headers=headers)
@@ -111,13 +97,13 @@ class Ingestor:
         return response.text
 
     def parseTable(self, html: str, tableId: str) -> bool:
-        log.info(f"Processing: {tableId}")
+        log.info(f"Processing table: {tableId}")
 
         parser = Parser(tableId)
         parser.feed(html)
 
         if parser.header is None or not parser.rows:
-            log.warning(f"No data found for table {tableId} in HTML")
+            log.warning(f"No such table found in HTML: {tableId}")
             return True
 
         match = re.search(r"Котировки по состоянию на ([0-9]+ [^ ]+ [0-9]+) года", parser.header)
