@@ -5,10 +5,10 @@ from db.dbtools import DbTypes, ColumnDef, MergeMode
 from db.dbtools import dbTempTable, dbLoadData, dbMerge, dbMergeRow
 
 class Assets:
-    MARKET = ColumnDef("MARKET", DbTypes.VARCHAR(15))
-    CODE = ColumnDef("CODE", DbTypes.VARCHAR(30))
-    NAME = ColumnDef("NAME", DbTypes.VARCHAR)
-    UNIT = ColumnDef("UNIT", DbTypes.VARCHAR(15))
+    MARKET = ColumnDef("market", DbTypes.VARCHAR(15))
+    CODE = ColumnDef("code", DbTypes.VARCHAR(30))
+    NAME = ColumnDef("name", DbTypes.VARCHAR)
+    UNIT = ColumnDef("unit", DbTypes.VARCHAR(15))
 
 class Trades:
     DT = ColumnDef("dt", DbTypes.TIMESTAMPTZ)
@@ -17,7 +17,7 @@ class Trades:
     L = ColumnDef("l", DbTypes.DECIMAL(20, 4))
     C = ColumnDef("c", DbTypes.DECIMAL(20, 4))
     V = ColumnDef("v", DbTypes.BIGINT)
-    UNIT = ColumnDef("UNIT", DbTypes.VARCHAR(15))
+    UNIT = ColumnDef("unit", DbTypes.VARCHAR(15))
 
 class AggType:
     INTRADAY = "I"
@@ -42,9 +42,8 @@ def dbInsertAsset(curs,
 
     mergeMode = MergeMode.MERGE if update else MergeMode.INSERT
 
-    with curs.connection:
-        row = {"market": market, "code": code, "name": name, "unit": unit}
-        return dbMergeRow(curs, "assets", row, key=("market", "code"), returning="id", mode=mergeMode)
+    row = {"market": market, "code": code, "name": name, "unit": unit}
+    return dbMergeRow(curs, "assets", row, key=("market", "code"), returning="id", mode=mergeMode)
 
 def dbInsertTrades(curs,
                    assetId: int,
@@ -62,10 +61,7 @@ def dbInsertTrades(curs,
 
     mergeMode = MergeMode.MERGE if update else MergeMode.INSERT
 
-    with curs.connection:
-        cols = (Trades.DT,) + valueCols
-        dbTempTable(curs, "temp", cols)
-        dbLoadData(curs, "temp", data, cols)
-
-        colNames = [c.name for c in valueCols]
-        dbMerge(curs, "trades", "temp", on={"asset_id": assetId, "agg_type": aggType, "dt": ColumnDef("dt")}, data=colNames, mode=mergeMode)
+    cols = (Trades.DT,) + valueCols
+    dbTempTable(curs, "temp", cols)
+    dbLoadData(curs, "temp", data, cols)
+    dbMerge(curs, "trades", "temp", on={"asset_id": assetId, "agg_type": aggType, "dt": ColumnDef("dt")}, cols=cols, mode=mergeMode)

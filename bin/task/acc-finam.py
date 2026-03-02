@@ -1,20 +1,80 @@
 import logging as log
 import httpx
 from typing import Any
-from datetime import date, timedelta
+from typing import NamedTuple
+from datetime import date, datetime, timedelta
+from decimal import Decimal
+from operator import attrgetter
 
 from common.config import config, initConfig
 from common.logtools import initLogging
+from common.dtotools import ofmethod
 from common.tools import getPeriodFromArgv, forEachSafely
 
 from api.finamapi import FinamApi
 
 import db.dbacc as dbacc
-from db.dbtools import DbParams, dbConnect
+from db.dbtools import DbParams, DbTypes, ColumnDef 
+from db.dbtools import dbConnect, dbTempTable, dbLoadData, dbMerge
+
+class Trade(NamedTuple):
+    id: str
+    symbol: str
+    price: Decimal
+    size: Decimal
+    side: str
+    timestamp: datetime
+    comment: str
+
+class Transaction(NamedTuple):
+    id: str
+    category: str
+    timestamp: datetime
+    symbol: str
+    currencyCode: str
+    units: Decimal
+    changeQty: Decimal
+    transactionCategory: str
+    transactionName: str
+
+class OpImport(NamedTuple):
+    code: str
+    transDt: datetime
+    opType: str
+    symbol: str
+    quantity: int
+    amount: Decimal
+    cur: str
+    comment: str
+
+@ofmethod
+class Asset(NamedTuple):
+    mic: str
+    ticker: str
+    isin: str
+    name: str
+    quote_currency: str
 
 class Ingestor:
     PROFILE = "acc-finam"
     BROKER = "FINAM"
+
+    # ISO format with trailing Z
+    TIME_FMT = "%Y-%m-%dT%H:%M:%SZ"
+
+    TRADE_OP_TYPES = {
+        "SIDE_BUY": "BUY",
+        "SIDE_SELL": "SELL"
+    }
+    TRANS_OP_TYPES = {
+        "DEPOSIT": "DEPOSIT",
+        "WITHDRAW": "WITHDRAW",
+        "TRANSFER": "TRANSFER",
+        "INCOME": "INCOME",
+        "OUTCOMES": "OUTCOMES",
+        "COMMISSION": "COMMISSION",
+        "TAX": "TAX"
+    }
 
     conn: Any
     finamApi: FinamApi
@@ -39,14 +99,224 @@ class Ingestor:
             self.conn.close()
 
     def process(self, startDate: date, endDate: date) -> bool:
-        accountIds = self.finamApi.getAccountIds()
-        return forEachSafely(accountIds, lambda accountId: self.processAccount(accountId, startDate, endDate))
+        finamAccIds = self.finamApi.getAccountIds()
+        return forEachSafely(finamAccIds, lambda finamAccId: self.processAccount(finamAccId, startDate, endDate))
     
-    def processAccount(self, accountId: str, startDate: date, endDate: date) -> bool:
-        log.info(f"Processing account: {accountId}, period: {startDate.isoformat()} to {endDate.isoformat()}")
+    def processAccount(self, finamAccId: str, startDate: date, endDate: date) -> bool:
+        log.info(f"Processing account: {finamAccId}, period: {startDate.isoformat()} to {endDate.isoformat()}")
+
+        trades = self.fetchTrades(finamAccId, startDate, endDate)
+        trans = self.fetchTrans(finamAccId, startDate, endDate)
+        log.info(f"Found {len(trades)} trades and {len(trans)} non-trading transactions")
 
         with self.conn.cursor() as curs:
-            id = dbacc.dbInsertAccount(curs, self.BROKER, accountId)
+            with self.conn:
+                accountId = dbacc.dbInsertAccount(curs, self.BROKER, finamAccId)
+
+            with self.conn:
+                symbols = {t.symbol for t in trades if t.symbol} | {t.symbol for t in trans if t.symbol}
+                symbols = self.filterNewSymbols(curs, symbols)
+                assets = [self.fetchAsset(finamAccId, s) for s in symbols]
+                log.info(f"Found {len(assets)} new assets")
+
+                if assets:
+                    self.dbLoadAssets(curs, assets)
+
+            with self.conn:
+                if trades:
+                    self.dbLoadTrades(curs, accountId, trades)
+
+                if trans:
+                    self.dbLoadTrans(curs, accountId, trans)
+
+    def fetchTrades(self, finamAccId: str, startDate: date, endDate: date) -> list[Trade]:
+        url = f"accounts/{finamAccId}/trades"
+        params = {
+            "interval.start_time": datetime.combine(startDate, datetime.min.time()).strftime(self.TIME_FMT),
+            "interval.end_time": datetime.combine(endDate + timedelta(days=1), datetime.min.time()).strftime(self.TIME_FMT)
+        }
+        data = self.finamApi.get(url, params)
+
+        return [
+            Trade(
+                id=t["trade_id"],
+                symbol=t["symbol"],
+                price=Decimal(t["price"]["value"]),
+                size=Decimal(t["size"]["value"]),
+                side=t["side"],
+                timestamp=datetime.fromisoformat(t["timestamp"]),
+                comment=t["comment"])
+            for t in data["trades"]
+        ]
+    
+    def fetchTrans(self, finamAccId: str, startDate: date, endDate: date) -> list[Transaction]:
+        url = f"accounts/{finamAccId}/transactions"
+        params = {
+            "interval.start_time": datetime.combine(startDate, datetime.min.time()).strftime(self.TIME_FMT),
+            "interval.end_time": datetime.combine(endDate + timedelta(days=1), datetime.min.time()).strftime(self.TIME_FMT)
+        }
+        data = self.finamApi.get(url, params)
+
+        toDecimal = lambda s: None if s is None else Decimal(s)
+
+        return [
+            Transaction(
+                id=t["id"],
+                category=t["category"],
+                timestamp=datetime.fromisoformat(t["timestamp"]),
+                symbol=t["symbol"],
+                currencyCode=t["change"]["currency_code"],
+                units=Decimal(t["change"]["units"]),
+                changeQty=toDecimal(t.get("change_qty", {}).get("value")),
+                transactionCategory=t["transaction_category"],
+                transactionName=t["transaction_name"])
+            for t in data["transactions"]
+        ]
+
+    def filterNewSymbols(self, curs, symbols: list[str]) -> list[str]:
+        tempTable = "symbols"
+        cols = (dbacc.Assets.TICKER, dbacc.Assets.MARKET)
+        data = [s.split("@", maxsplit=1) for s in symbols]
+
+        dbTempTable(curs, tempTable, cols)
+        dbLoadData(curs, tempTable, data, cols)
+
+        curs.execute(
+            f"SELECT DISTINCT t.market, t.ticker FROM {tempTable} AS t "
+            "LEFT JOIN assets AS a ON a.market = t.market AND a.ticker = t.ticker "
+            "WHERE a.id IS NULL;"
+        )
+        data = curs.fetchall()
+
+        return [f"{ticker}@{market}" for market, ticker in data]
+
+    def fetchAsset(self, finamAccId: str, symbol: str) -> Asset:
+        url = f"assets/{symbol}"
+        params = {"account_id": finamAccId}
+
+        try:
+            data = self.finamApi.get(url, params)
+        except httpx.HTTPStatusError as e:
+            if e.response.status_code != 404:
+                raise
+
+            # to circumvent the case if asset is archived
+            ticker, mic = symbol.split("@", maxsplit=1)
+            return Asset(mic, ticker, isin=None, name=f"Not Found: {symbol}", quote_currency="???")
+
+        if not data.get("isin"):
+            data["isin"] = None
+
+        return Asset.of(data)
+    
+    def dbLoadAssets(self, curs, assets: list[Asset]) -> None:
+        symbols = ", ".join(f"{a.ticker}@{a.mic}" for a in assets)
+        log.info(f"Loading into DB: {symbols}")
+
+        cols = (dbacc.Assets.MARKET, dbacc.Assets.TICKER, dbacc.Assets.ISIN, dbacc.Assets.NAME, dbacc.Assets.CUR)
+        dbLoadData(curs, "assets", assets, cols)
+
+    def dbLoadTrades(self, curs, accountId: int, trades: list[Trade]) -> None:
+        log.info(f"Loading trades into DB")
+
+        self.validateQuantity(trades, "size")
+
+        opImports = [
+            OpImport(
+                code=t.id,
+                transDt=t.timestamp,
+                opType=self.TRADE_OP_TYPES[t.side],
+                symbol=t.symbol,
+                quantity=int(t.size),
+                amount=(t.price * t.size),
+                cur=None,
+                comment=t.comment)
+            for t in trades
+        ]
+
+        self.dbLoadOps(curs, accountId, opImports, "trades")
+
+    def dbLoadTrans(self, curs, accountId: int, trans: list[Transaction]) -> None:
+        log.info(f"Loading non-trading transactions into DB")
+
+        self.validateQuantity(trans, "changeQty")
+
+        invalid = [t for t in trans if t.category != t.transactionCategory]
+        if invalid:
+            raise Exception(f"Non-trading transactions have mismatching categories: {invalid}")
+
+        opImports = [
+            OpImport(
+                code=t.id,
+                transDt=t.timestamp,
+                opType=self.TRANS_OP_TYPES[t.category],
+                symbol=t.symbol,
+                quantity=None,
+                amount=t.units,
+                cur=t.currencyCode,
+                comment=t.transactionName)
+            for t in trans
+        ]
+
+        self.dbLoadOps(curs, accountId, opImports, "trans")
+
+    def validateQuantity(self, items: list[Any], quantityAttr: str):
+        getQuantity = attrgetter(quantityAttr)
+        isInvalid = lambda n: n is not None and n % 1 != 0
+
+        invalid = [i for i in items if isInvalid(getQuantity(i))]
+        if invalid:
+            raise Exception(f"Fractional quantity not supported: {invalid}")
+
+    def dbLoadOps(self, curs, accountId: int, opImports: list[OpImport], impName: str) -> None:
+        impTable = f"{impName}_imp"
+        cols = (
+            dbacc.Ops.CODE,
+            dbacc.Ops.TRANS_DT,
+            dbacc.Ops.OP_TYPE,
+            ColumnDef("symbol"),
+            dbacc.Ops.QUANTITY,
+            dbacc.Ops.AMOUNT,
+            dbacc.Ops.CUR,
+            dbacc.Ops.COMMENT
+        )
+        dbTempTable(curs, impTable, cols)
+        dbLoadData(curs, impTable, opImports, cols)
+
+        stagingTable = f"{impName}_staging"
+        cols = (
+            dbacc.Ops.BROKER,
+            dbacc.Ops.CODE,
+            dbacc.Ops.ACCOUNT_ID,
+            dbacc.Ops.TRANS_DT,
+            dbacc.Ops.OP_TYPE,
+            dbacc.Ops.ASSET_ID,
+            dbacc.Ops.QUANTITY,
+            dbacc.Ops.AMOUNT,
+            dbacc.Ops.CUR,
+            dbacc.Ops.COMMENT
+        )
+        dbTempTable(curs, stagingTable, cols)
+
+        curs.execute(
+            f"INSERT INTO {stagingTable} "
+            f"SELECT '{self.BROKER}' AS broker, "
+                "t.code, "
+                f"{accountId} AS account_id, "
+                "t.trans_dt, "
+                "t.op_type, "
+                "a.id AS asset_id, "
+                "t.quantity, "
+                "t.amount, "
+                "t.cur, "
+                "t.comment "
+            f"FROM {impTable} AS t "
+            "LEFT JOIN assets AS a "
+                "ON a.market = SPLIT_PART(t.symbol, '@', 2) "
+                    "AND a.ticker = SPLIT_PART(t.symbol, '@', 1);"
+        )
+
+        dbMerge(curs, "ops", stagingTable, on=("broker", "code"), cols=cols)
 
 def main() -> int:
     ingestor = Ingestor()

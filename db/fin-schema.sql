@@ -41,7 +41,7 @@ CREATE TABLE trades (
 -- M - monthly
 -- Q - quarterly
 -- Y - annual
--- I - immediate (values for some timestamp provided in response of history request)
+-- I - intraday (values for some timestamp provided in response of history request)
 -- S - snapshot (values taken on current timestamp in response of instant value request)
 -- M1, M15, ... - values of interval in minutes, 15 minutes, etc.
 -- H - hourly

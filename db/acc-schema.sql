@@ -6,25 +6,25 @@ CREATE TABLE accounts (
     comment TEXT,
     attrs VARCHAR(15) ARRAY);
 
-ALTER TABLE accounts ADD CONSTRAINT accounts_uk_01 UNIQUE NULLS NOT DISTINCT (broker, code);
+ALTER TABLE accounts ADD CONSTRAINT accounts_uk_01 UNIQUE (broker, code);
 
 
 CREATE TABLE assets (
     id BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
     market VARCHAR(15) NOT NULL,
-    ticker VARCHAR(30) NOT NULL,
-    isin VARCHAR(15) NOT NULL,
+    ticker VARCHAR(15) NOT NULL,
+    isin VARCHAR(12),
     name TEXT NOT NULL,
     cur VARCHAR(3) NOT NULL);
 
-ALTER TABLE assets ADD CONSTRAINT assets_uk_01 UNIQUE NULLS NOT DISTINCT (market, ticker);
-ALTER TABLE assets ADD CONSTRAINT assets_uk_02 UNIQUE NULLS NOT DISTINCT (isin);
+ALTER TABLE assets ADD CONSTRAINT assets_uk_01 UNIQUE (market, ticker);
+ALTER TABLE assets ADD CONSTRAINT assets_uk_02 UNIQUE NULLS DISTINCT (isin);
 
 
 CREATE TABLE ops (
     id BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
     broker VARCHAR(15) NOT NULL,
-    code VARCHAR(15) NOT NULL,
+    code VARCHAR(25) NOT NULL,
     account_id BIGINT NOT NULL CONSTRAINT ops_fk_01 REFERENCES accounts(id),
     corr_acc_id BIGINT CONSTRAINT ops_fk_02 REFERENCES accounts(id),
     trans_dt TIMESTAMP WITH TIME ZONE NOT NULL,

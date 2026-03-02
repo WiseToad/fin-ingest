@@ -173,9 +173,12 @@ class Ingestor:
         log.info(f"Loading into DB: {self.MARKET} {product.product_code}")
 
         with self.conn.cursor() as curs:
-            assetId = dbfin.dbInsertAsset(curs, self.MARKET, product.product_code, product.product_name, product.unit, update=True)
-            valueCols = (dbfin.Trades.C, dbfin.Trades.UNIT)
-            dbfin.dbInsertTrades(curs, assetId, prices, valueCols, dbfin.AggType.DAILY)
+            with self.conn:
+                assetId = dbfin.dbInsertAsset(curs, self.MARKET, product.product_code, product.product_name, product.unit, update=True)
+
+            with self.conn:
+                valueCols = (dbfin.Trades.C, dbfin.Trades.UNIT)
+                dbfin.dbInsertTrades(curs, assetId, prices, valueCols, dbfin.AggType.DAILY)
 
 def main() -> int:
     ingestor = Ingestor()

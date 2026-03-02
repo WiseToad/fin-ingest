@@ -18,12 +18,18 @@ class DbParams(NamedTuple):
 class DbTypes:
     VARCHAR = lambda n = None: "VARCHAR" if n is None else f"VARCHAR({n})"
     BIGINT = "BIGINT"
-    DECIMAL = lambda s, p: f"DECIMAL({s}, {p})"
+    DECIMAL = lambda s, p = None: f"DECIMAL({s})" if p is None else f"DECIMAL({s}, {p})"
     TIMESTAMPTZ = "TIMESTAMP WITH TIME ZONE"
 
 class ColumnDef(NamedTuple):
     name: str
     type: str = DbTypes.VARCHAR
+
+    def __getattribute__(self, name: str) -> Any:
+        value = object.__getattribute__(self, name)
+        if name == "type" and callable(value):
+            value = value()
+        return value
 
 class SqlParam(NamedTuple):
     placeholder: str = "%s"
@@ -83,7 +89,7 @@ def dbLoadCsv(curs, tableName: str, fileName: str, cols: Iterable[str | ColumnDe
         header = next(f).rstrip("\r\n")
         log.debug(f"Skipping CSV header: \"{header}\"")
 
-        cols = [c.name if isinstance(c, ColumnDef) else c for c in cols]
+        cols = [c.name if isinstance(c, ColumnDef) else c for c in __toIterable(cols)]
         curs.copy_from(f, tableName, sep=sep, columns=cols)
 
     log.debug(f"CSV loaded")
@@ -92,7 +98,7 @@ def dbMerge(curs,
             targetTable: str,
             sourceTable: str, *,
             on: Iterable[str] | dict[str, Any],
-            data: Iterable[str] | dict[str, Any] = None,
+            cols: Iterable[str | ColumnDef] | dict[str, Any] = None,
             params: Iterable[Any] = None,
             mode: MergeMode = None) -> None:
 
@@ -101,10 +107,15 @@ def dbMerge(curs,
     targetAlias, sourceAlias = "t", "s"
 
     on = __rowToSql(__toDict(on, ColumnDef), sourceAlias)
-    data = __rowToSql(__toDict(data, ColumnDef), sourceAlias)
 
-    insert = on | data
-    update = data
+    if not isinstance(cols, dict):
+        cols = [c.name if isinstance(c, ColumnDef) else c for c in __toIterable(cols)]
+        cols = {c: ColumnDef(c) for c in cols}
+    cols = __rowToSql(cols, sourceAlias)
+
+    onCols = {col.casefold() for col in on}
+    insert = on | {col: sql for col, sql in cols.items() if col.casefold() not in onCols}
+    update = cols
 
     if mode == MergeMode.INSERT:
         update = ()

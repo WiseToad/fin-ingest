@@ -155,9 +155,12 @@ class Ingestor:
         log.info(f"Loading into DB: {asset.mic} {asset.ticker}")
 
         with self.conn.cursor() as curs:
-            assetId = dbfin.dbInsertAsset(curs, asset.mic, asset.ticker, asset.name, update=True)
-            valueCols = (dbfin.Trades.O, dbfin.Trades.H, dbfin.Trades.L, dbfin.Trades.C, dbfin.Trades.V)
-            dbfin.dbInsertTrades(curs, assetId, bars, valueCols, dbfin.AggType.DAILY)
+            with self.conn:
+                assetId = dbfin.dbInsertAsset(curs, asset.mic, asset.ticker, asset.name, update=True)
+
+            with self.conn:
+                valueCols = (dbfin.Trades.O, dbfin.Trades.H, dbfin.Trades.L, dbfin.Trades.C, dbfin.Trades.V)
+                dbfin.dbInsertTrades(curs, assetId, bars, valueCols, dbfin.AggType.DAILY)
 
 def main() -> int:
     ingestor = Ingestor()

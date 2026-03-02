@@ -4,35 +4,35 @@ import httpx
 from typing import Any, Callable
 
 class FinamApi:
-    API_BASE_URL = "https://api.finam.ru/v1"
+    BASE_URL = "https://api.finam.ru/v1"
 
-    http: httpx.Client
+    __http: httpx.Client
 
-    token: str
-    jwtToken: str
+    __token: str
+    __jwtToken: str
 
     def __init__(self, http: httpx.Client, token: str):
-        self.http = http
-        self.token = token
-        self.jwtToken = None
+        self.__http = http
+        self.__token = token
+        self.__jwtToken = None
 
     def get(self, url: str, params: dict[str, Any]) -> Any:
         return self.__call(lambda: self.__get(url, params))
 
     def __get(self, url: str, params: dict[str, Any]) -> httpx.Response:
-        url = f"{self.API_BASE_URL}/{url}"
-        return self.http.get(url, params=params, headers={"Authorization": self.jwtToken})
+        url = f"{self.BASE_URL}/{url}"
+        return self.__http.get(url, params=params, headers={"Authorization": self.__jwtToken})
 
     def getAccountIds(self) -> list[str]:
         data = self.__call(self.__getAccountIds)
         return data["account_ids"]
 
     def __getAccountIds(self) -> httpx.Response:
-        url = f"{self.API_BASE_URL}/sessions/details"
-        return self.http.post(url, json={"token": self.jwtToken})
+        url = f"{self.BASE_URL}/sessions/details"
+        return self.__http.post(url, json={"token": self.__jwtToken})
 
     def __call(self, perform: Callable[[], httpx.Response]) -> Any:
-        if not self.jwtToken:
+        if not self.__jwtToken:
             self.__updateJwtToken()
 
         response = perform()
@@ -61,9 +61,9 @@ class FinamApi:
     def __updateJwtToken(self) -> None:
         log.debug("Updating token")
 
-        url = f"{self.API_BASE_URL}/sessions"
-        response = self.http.post(url, json={"secret": self.token})
+        url = f"{self.BASE_URL}/sessions"
+        response = self.__http.post(url, json={"secret": self.__token})
         response.raise_for_status()
         
         data = json.loads(response.text)
-        self.jwtToken = data["token"]
+        self.__jwtToken = data["token"]
