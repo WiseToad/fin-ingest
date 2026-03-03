@@ -18,7 +18,7 @@ class Assets:
 
 class Ops:
     BROKER = ColumnDef("broker", DbTypes.VARCHAR(15))
-    CODE = ColumnDef("code", DbTypes.VARCHAR(25))
+    CODE = ColumnDef("code", DbTypes.VARCHAR(50))
     ACCOUNT_ID = ColumnDef("account_id", DbTypes.BIGINT)
     CORR_ACC_ID = ColumnDef("corr_acc_id", DbTypes.BIGINT)
     TRANS_DT = ColumnDef("trans_dt", DbTypes.TIMESTAMPTZ)

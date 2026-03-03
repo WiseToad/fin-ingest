@@ -4,7 +4,7 @@ CREATE USER acc WITH PASSWORD 'secret';
 CREATE DATABASE acc OWNER acc;
 GRANT ALL PRIVILEGES ON DATABASE acc TO acc;
 
-ALTER DATABASE fin SET timezone TO 'Europe/Moscow';
+ALTER DATABASE acc SET timezone TO 'Europe/Moscow';
 
 CREATE USER accview WITH PASSWORD 'secret';
 CREATE USER accload WITH PASSWORD 'secret';

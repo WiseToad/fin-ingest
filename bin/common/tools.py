@@ -60,6 +60,3 @@ def toIterable(value: Any, scalars: type | Iterable[type] = None) -> Iterable:
         return (value,)
 
     return value
-
-def cvtNoneable[T](v: Any, cvt: Callable[[Any], T]) -> T | None:
-    return None if v is None else cvt(v)

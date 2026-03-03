@@ -1,17 +1,17 @@
 import logging as log
 import httpx
+import operator, itertools, functools
 from typing import Any
 from typing import NamedTuple
 from datetime import date, datetime, timedelta
 from decimal import Decimal
-from operator import attrgetter
 
+import common.noneable as noneable
 from common.config import config, initConfig
 from common.logtools import initLogging
 from common.dtotools import ofmethod
 from common.datetools import dateToDt, MOSCOW_TZ
 from common.tools import getPeriodFromArgv, forEachSafely
-from common.tools import cvtNoneable
 
 from api.finamapi import FinamApi
 
@@ -23,32 +23,12 @@ class Account(NamedTuple):
     account_id: str
     open_account_date: datetime
 
-class Trade(NamedTuple):
-    id: str
-    symbol: str
-    price: Decimal
-    size: Decimal
-    side: str
-    timestamp: datetime
-    comment: str
-
-class Transaction(NamedTuple):
-    id: str
-    category: str
-    timestamp: datetime
-    symbol: str
-    currencyCode: str
-    units: Decimal
-    changeQty: Decimal
-    transactionCategory: str
-    transactionName: str
-
-class OpImport(NamedTuple):
+class Op(NamedTuple):
     code: str
     transDt: datetime
     opType: str
     symbol: str
-    quantity: int
+    quantity: Decimal
     amount: Decimal
     cur: str
     comment: str
@@ -102,47 +82,48 @@ class Ingestor:
             self.conn.close()
 
     def process(self, startDate: date, endDate: date) -> bool:
-        finamAccIds = self.finamApi.getAccountIds()
-        return forEachSafely(finamAccIds, lambda finamAccId: self.processAccount(finamAccId, startDate, endDate))
+        accountCodes = self.finamApi.getAccountIds()
+        return forEachSafely(accountCodes, lambda accountCode: self.processAccount(accountCode, startDate, endDate))
     
-    def processAccount(self, finamAccId: str, startDate: date, endDate: date) -> bool:
-        log.info(f"Processing account: {finamAccId}, period: {startDate.isoformat()} to {endDate.isoformat()}")
+    def processAccount(self, accountCode: str, startDate: date, endDate: date) -> bool:
+        log.info(f"Processing account: {accountCode}, period: {startDate.isoformat()} to {endDate.isoformat()}")
 
         startDt = dateToDt(startDate, MOSCOW_TZ)
         endDt = dateToDt(endDate, MOSCOW_TZ) + timedelta(days=1)
 
-        account = self.fetchAccount(finamAccId)
+        account = self.fetchAccount(accountCode)
         if endDt < account.open_account_date:
             # Further requests will complain with HTTP 400 without this check 
             log.info(f"Period if beyond account open date, skipping")
             return
 
-        trades = self.fetchTrades(finamAccId, startDt, endDt)
-        trans = self.fetchTrans(finamAccId, startDt, endDt)
+        trades = self.fetchTrades(accountCode, startDt, endDt)
+        trans = self.fetchTrans(accountCode, startDt, endDt)
         log.info(f"Found {len(trades)} trades and {len(trans)} non-trading transactions")
+
+        ops = trades + trans
+        self.validateQuantity(ops)
+        self.fixOpCodes(accountCode, ops)
 
         with self.conn.cursor() as curs:
             with self.conn:
-                accountId = dbacc.dbInsertAccount(curs, self.BROKER, finamAccId)
+                accountId = dbacc.dbInsertAccount(curs, self.BROKER, accountCode)
 
             with self.conn:
-                symbols = {t.symbol for t in trades if t.symbol} | {t.symbol for t in trans if t.symbol}
+                symbols = {op.symbol for op in ops if op.symbol}
                 symbols = self.filterNewSymbols(curs, symbols)
-                assets = [self.fetchAsset(finamAccId, s) for s in symbols]
+                assets = [self.fetchAsset(accountCode, s) for s in symbols]
                 log.info(f"Found {len(assets)} new assets")
 
                 if assets:
                     self.dbLoadAssets(curs, assets)
 
-            with self.conn:
-                if trades:
-                    self.dbLoadTrades(curs, accountId, trades)
+            if ops:
+                with self.conn:
+                    self.dbLoadOps(curs, accountId, ops)
 
-                if trans:
-                    self.dbLoadTrans(curs, accountId, trans)
-
-    def fetchAccount(self, finamAccId: str) -> Account:
-        url = f"accounts/{finamAccId}"
+    def fetchAccount(self, accountCode: str) -> Account:
+        url = f"accounts/{accountCode}"
         data = self.finamApi.get(url, {})
 
         return Account(
@@ -150,8 +131,8 @@ class Ingestor:
             open_account_date=datetime.fromisoformat(data["open_account_date"])
         )
 
-    def fetchTrades(self, finamAccId: str, startDt: datetime, endDt: datetime) -> list[Trade]:
-        url = f"accounts/{finamAccId}/trades"
+    def fetchTrades(self, accountCode: str, startDt: datetime, endDt: datetime) -> list[Op]:
+        url = f"accounts/{accountCode}/trades"
         params = {
             "interval.start_time": startDt.isoformat(),
             "interval.end_time": endDt.isoformat()
@@ -159,19 +140,19 @@ class Ingestor:
         data = self.finamApi.get(url, params)
 
         return [
-            Trade(
-                id=t["trade_id"],
+            Op( code=t["trade_id"],
+                transDt=datetime.fromisoformat(t["timestamp"]),
+                opType=self.TRADE_OP_TYPES[t["side"]],
                 symbol=t["symbol"],
-                price=Decimal(t["price"]["value"]),
-                size=Decimal(t["size"]["value"]),
-                side=t["side"],
-                timestamp=datetime.fromisoformat(t["timestamp"]),
+                quantity=Decimal(t["size"]["value"]),
+                amount=(Decimal(t["price"]["value"]) * Decimal(t["size"]["value"])),
+                cur=None,
                 comment=t["comment"])
             for t in data["trades"]
         ]
-    
-    def fetchTrans(self, finamAccId: str, startDt: datetime, endDt: datetime) -> list[Transaction]:
-        url = f"accounts/{finamAccId}/transactions"
+
+    def fetchTrans(self, accountCode: str, startDt: datetime, endDt: datetime) -> list[Op]:
+        url = f"accounts/{accountCode}/transactions"
         params = {
             "interval.start_time": startDt.isoformat(),
             "interval.end_time": endDt.isoformat()
@@ -179,18 +160,34 @@ class Ingestor:
         data = self.finamApi.get(url, params)
 
         return [
-            Transaction(
-                id=t["id"],
-                category=t["category"],
-                timestamp=datetime.fromisoformat(t["timestamp"]),
+            Op( code=t["id"],
+                transDt=datetime.fromisoformat(t["timestamp"]),
+                opType=self.TRANS_OP_TYPES[t["category"]],
                 symbol=t["symbol"],
-                currencyCode=t["change"]["currency_code"],
-                units=Decimal(t["change"]["units"]),
-                changeQty=cvtNoneable(t.get("change_qty", {}).get("value"), Decimal),
-                transactionCategory=t["transaction_category"],
-                transactionName=t["transaction_name"])
+                quantity=noneable.apply(t.get("change_qty", {}).get("value"), Decimal),
+                amount=Decimal(t["change"]["units"]),
+                cur=t["change"]["currency_code"],
+                comment=t["transaction_name"])
             for t in data["transactions"]
         ]
+
+    def validateQuantity(self, ops: list[Op]):
+        invalid = [op for op in ops if op.quantity is not None and op.quantity % 1 != 0]
+        if invalid:
+            raise Exception(f"Fractional quantity isn't supported: {invalid}")
+
+    def fixOpCodes(self, accountCode: str, ops: list[Op]):
+        invalid = ((i, op) for i, op in enumerate(ops) if not op.code)
+        for i, op in invalid:
+            ops[i] = Op(
+                code=f"{accountCode}-{int(op.transDt.timestamp())}-{op.symbol}",
+                transDt=op.transDt,
+                opType=op.opType,
+                symbol=op.symbol,
+                quantity=op.quantity,
+                amount=op.amount,
+                cur=op.cur,
+                comment=op.cur)
 
     def filterNewSymbols(self, curs, symbols: list[str]) -> list[str]:
         tempTable = "symbols"
@@ -209,9 +206,9 @@ class Ingestor:
 
         return [f"{ticker}@{market}" for market, ticker in data]
 
-    def fetchAsset(self, finamAccId: str, symbol: str) -> Asset:
+    def fetchAsset(self, accountCode: str, symbol: str) -> Asset:
         url = f"assets/{symbol}"
-        params = {"account_id": finamAccId}
+        params = {"account_id": accountCode}
 
         try:
             data = self.finamApi.get(url, params)
@@ -235,60 +232,10 @@ class Ingestor:
         cols = (dbacc.Assets.MARKET, dbacc.Assets.TICKER, dbacc.Assets.ISIN, dbacc.Assets.NAME, dbacc.Assets.CUR)
         dbLoadData(curs, "assets", assets, cols)
 
-    def dbLoadTrades(self, curs, accountId: int, trades: list[Trade]) -> None:
-        log.info(f"Loading trades into DB")
+    def dbLoadOps(self, curs, accountId: int, ops: list[Op]) -> None:
+        log.info(f"Loading operations into DB")
 
-        self.validateQuantity(trades, "size")
-
-        opImports = [
-            OpImport(
-                code=t.id,
-                transDt=t.timestamp,
-                opType=self.TRADE_OP_TYPES[t.side],
-                symbol=t.symbol,
-                quantity=int(t.size),
-                amount=(t.price * t.size),
-                cur=None,
-                comment=t.comment)
-            for t in trades
-        ]
-
-        self.dbLoadOps(curs, accountId, opImports, "trades")
-
-    def dbLoadTrans(self, curs, accountId: int, trans: list[Transaction]) -> None:
-        log.info(f"Loading non-trading transactions into DB")
-
-        self.validateQuantity(trans, "changeQty")
-
-        invalid = [t for t in trans if t.category != t.transactionCategory]
-        if invalid:
-            raise Exception(f"Non-trading transactions have mismatching categories: {invalid}")
-
-        opImports = [
-            OpImport(
-                code=t.id,
-                transDt=t.timestamp,
-                opType=self.TRANS_OP_TYPES[t.category],
-                symbol=t.symbol,
-                quantity=None,
-                amount=t.units,
-                cur=t.currencyCode,
-                comment=t.transactionName)
-            for t in trans
-        ]
-
-        self.dbLoadOps(curs, accountId, opImports, "trans")
-
-    def validateQuantity(self, items: list[Any], quantityAttr: str):
-        getQuantity = attrgetter(quantityAttr)
-        isInvalid = lambda n: n is not None and n % 1 != 0
-
-        invalid = [i for i in items if isInvalid(getQuantity(i))]
-        if invalid:
-            raise Exception(f"Fractional quantity not supported: {invalid}")
-
-    def dbLoadOps(self, curs, accountId: int, opImports: list[OpImport], impName: str) -> None:
-        impTable = f"{impName}_imp"
+        impTable = f"imp"
         cols = (
             dbacc.Ops.CODE,
             dbacc.Ops.TRANS_DT,
@@ -300,9 +247,9 @@ class Ingestor:
             dbacc.Ops.COMMENT
         )
         dbTempTable(curs, impTable, cols)
-        dbLoadData(curs, impTable, opImports, cols)
+        dbLoadData(curs, impTable, ops, cols)
 
-        stagingTable = f"{impName}_staging"
+        stagingTable = f"staging"
         cols = (
             dbacc.Ops.BROKER,
             dbacc.Ops.CODE,
@@ -325,14 +272,16 @@ class Ingestor:
                 "t.trans_dt, "
                 "t.op_type, "
                 "a.id AS asset_id, "
-                "t.quantity, "
-                "t.amount, "
+                "sum(t.quantity) AS quantity, "
+                "sum(t.amount) AS amount, "
                 "t.cur, "
                 "t.comment "
             f"FROM {impTable} AS t "
             "LEFT JOIN assets AS a "
                 "ON a.market = SPLIT_PART(t.symbol, '@', 2) "
-                    "AND a.ticker = SPLIT_PART(t.symbol, '@', 1);"
+                    "AND a.ticker = SPLIT_PART(t.symbol, '@', 1) "
+            "GROUP BY "
+                "t.code, t.trans_dt, t.op_type, a.id, t.cur, t.comment;"
         )
 
         dbMerge(curs, "ops", stagingTable, on=("broker", "code"), cols=cols)
