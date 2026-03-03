@@ -9,13 +9,19 @@ from operator import attrgetter
 from common.config import config, initConfig
 from common.logtools import initLogging
 from common.dtotools import ofmethod
+from common.datetools import dateToDt, MOSCOW_TZ
 from common.tools import getPeriodFromArgv, forEachSafely
+from common.tools import cvtNoneable
 
 from api.finamapi import FinamApi
 
 import db.dbacc as dbacc
-from db.dbtools import DbParams, DbTypes, ColumnDef 
+from db.dbtools import DbParams, ColumnDef 
 from db.dbtools import dbConnect, dbTempTable, dbLoadData, dbMerge
+
+class Account(NamedTuple):
+    account_id: str
+    open_account_date: datetime
 
 class Trade(NamedTuple):
     id: str
@@ -58,9 +64,6 @@ class Asset(NamedTuple):
 class Ingestor:
     PROFILE = "acc-finam"
     BROKER = "FINAM"
-
-    # ISO format with trailing Z
-    TIME_FMT = "%Y-%m-%dT%H:%M:%SZ"
 
     TRADE_OP_TYPES = {
         "SIDE_BUY": "BUY",
@@ -105,8 +108,17 @@ class Ingestor:
     def processAccount(self, finamAccId: str, startDate: date, endDate: date) -> bool:
         log.info(f"Processing account: {finamAccId}, period: {startDate.isoformat()} to {endDate.isoformat()}")
 
-        trades = self.fetchTrades(finamAccId, startDate, endDate)
-        trans = self.fetchTrans(finamAccId, startDate, endDate)
+        startDt = dateToDt(startDate, MOSCOW_TZ)
+        endDt = dateToDt(endDate, MOSCOW_TZ) + timedelta(days=1)
+
+        account = self.fetchAccount(finamAccId)
+        if endDt < account.open_account_date:
+            # Further requests will complain with HTTP 400 without this check 
+            log.info(f"Period if beyond account open date, skipping")
+            return
+
+        trades = self.fetchTrades(finamAccId, startDt, endDt)
+        trans = self.fetchTrans(finamAccId, startDt, endDt)
         log.info(f"Found {len(trades)} trades and {len(trans)} non-trading transactions")
 
         with self.conn.cursor() as curs:
@@ -129,11 +141,20 @@ class Ingestor:
                 if trans:
                     self.dbLoadTrans(curs, accountId, trans)
 
-    def fetchTrades(self, finamAccId: str, startDate: date, endDate: date) -> list[Trade]:
+    def fetchAccount(self, finamAccId: str) -> Account:
+        url = f"accounts/{finamAccId}"
+        data = self.finamApi.get(url, {})
+
+        return Account(
+            account_id=data["account_id"],
+            open_account_date=datetime.fromisoformat(data["open_account_date"])
+        )
+
+    def fetchTrades(self, finamAccId: str, startDt: datetime, endDt: datetime) -> list[Trade]:
         url = f"accounts/{finamAccId}/trades"
         params = {
-            "interval.start_time": datetime.combine(startDate, datetime.min.time()).strftime(self.TIME_FMT),
-            "interval.end_time": datetime.combine(endDate + timedelta(days=1), datetime.min.time()).strftime(self.TIME_FMT)
+            "interval.start_time": startDt.isoformat(),
+            "interval.end_time": endDt.isoformat()
         }
         data = self.finamApi.get(url, params)
 
@@ -149,15 +170,13 @@ class Ingestor:
             for t in data["trades"]
         ]
     
-    def fetchTrans(self, finamAccId: str, startDate: date, endDate: date) -> list[Transaction]:
+    def fetchTrans(self, finamAccId: str, startDt: datetime, endDt: datetime) -> list[Transaction]:
         url = f"accounts/{finamAccId}/transactions"
         params = {
-            "interval.start_time": datetime.combine(startDate, datetime.min.time()).strftime(self.TIME_FMT),
-            "interval.end_time": datetime.combine(endDate + timedelta(days=1), datetime.min.time()).strftime(self.TIME_FMT)
+            "interval.start_time": startDt.isoformat(),
+            "interval.end_time": endDt.isoformat()
         }
         data = self.finamApi.get(url, params)
-
-        toDecimal = lambda s: None if s is None else Decimal(s)
 
         return [
             Transaction(
@@ -167,7 +186,7 @@ class Ingestor:
                 symbol=t["symbol"],
                 currencyCode=t["change"]["currency_code"],
                 units=Decimal(t["change"]["units"]),
-                changeQty=toDecimal(t.get("change_qty", {}).get("value")),
+                changeQty=cvtNoneable(t.get("change_qty", {}).get("value"), Decimal),
                 transactionCategory=t["transaction_category"],
                 transactionName=t["transaction_name"])
             for t in data["transactions"]

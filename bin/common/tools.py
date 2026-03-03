@@ -1,7 +1,7 @@
 import sys
 import logging as log
 from typing import Any, Iterable, Callable
-from datetime import date, timedelta
+from datetime import date
 
 def getDateFromArgv(defaultDate: date = None) -> date:
     if len(sys.argv) > 2:
@@ -60,3 +60,6 @@ def toIterable(value: Any, scalars: type | Iterable[type] = None) -> Iterable:
         return (value,)
 
     return value
+
+def cvtNoneable[T](v: Any, cvt: Callable[[Any], T]) -> T | None:
+    return None if v is None else cvt(v)

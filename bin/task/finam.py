@@ -79,7 +79,10 @@ class Ingestor:
     def processAsset(self, asset: Asset, startDate: date, endDate: date) -> None:
         log.info(f"Processing: {asset.symbol}, period: {startDate.isoformat()} to {endDate.isoformat()}")
 
-        bars = self.fetchBars(asset.symbol, startDate, endDate, self.TIME_FRAME)
+        startDt = dateToDt(startDate, MOSCOW_TZ)
+        endDt = dateToDt(endDate, MOSCOW_TZ) + timedelta(days=1)
+
+        bars = self.fetchBars(asset.symbol, startDt, endDt, self.TIME_FRAME)
         if not bars:
             log.warning("No bars retrieved")
             return
@@ -128,17 +131,13 @@ class Ingestor:
         data = self.finamApi.get("assets", None)
         return [Asset.of(a) for a in data["assets"]]
 
-    def fetchBars(self, symbol: str, startDate: date, endDate: date, timeFrame: str) -> list[Bar]:
+    def fetchBars(self, symbol: str, startDt: datetime, endDt: datetime, timeFrame: str) -> list[Bar]:
         url = f"instruments/{symbol}/bars"
-        
-        startDt = dateToDt(startDate, MOSCOW_TZ)
-        endDt = dateToDt(endDate + timedelta(days=1), MOSCOW_TZ)
         params = {
             "interval.start_time": startDt.isoformat(),
             "interval.end_time": endDt.isoformat(),
             "timeframe": timeFrame
         }
-
         data = self.finamApi.get(url, params)
 
         return [
