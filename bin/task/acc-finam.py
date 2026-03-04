@@ -118,9 +118,11 @@ class Ingestor:
                 if assets:
                     self.dbLoadAssets(curs, assets)
 
-            if ops:
-                with self.conn:
+            with self.conn:
+                if ops:
                     self.dbLoadOps(curs, accountId, ops)
+
+                self.dbLinkOps(curs)
 
     def fetchAccount(self, accountCode: str) -> Account:
         url = f"accounts/{accountCode}"
@@ -177,10 +179,12 @@ class Ingestor:
             raise Exception(f"Fractional quantity isn't supported: {invalid}")
 
     def fixOpCodes(self, accountCode: str, ops: list[Op]):
-        invalid = ((i, op) for i, op in enumerate(ops) if not op.code)
-        for i, op in invalid:
+        for i, op in enumerate(ops):
+            code = op.code if op.code else f"{int(op.transDt.timestamp())}-{op.symbol}"
+            code = f"{accountCode}-{code}"
+
             ops[i] = Op(
-                code=f"{accountCode}-{int(op.transDt.timestamp())}-{op.symbol}",
+                code=code,
                 transDt=op.transDt,
                 opType=op.opType,
                 symbol=op.symbol,
@@ -285,6 +289,10 @@ class Ingestor:
         )
 
         dbMerge(curs, "ops", stagingTable, on=("broker", "code"), cols=cols)
+
+    def dbLinkOps(self, curs) -> None:
+        log.info(f"Linking operations in DB")
+        curs.execute("CALL link_ops_finam();")
 
 def main() -> int:
     ingestor = Ingestor()
