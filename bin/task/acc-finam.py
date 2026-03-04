@@ -47,16 +47,22 @@ class Ingestor:
 
     TRADE_OP_TYPES = {
         "SIDE_BUY": "BUY",
-        "SIDE_SELL": "SELL"
+        "SIDE_SELL": "SELL",
+        "SIDE_UNSPECIFIED": "UNSPECIFIED"
     }
     TRANS_OP_TYPES = {
-        "DEPOSIT": "DEPOSIT",
-        "WITHDRAW": "WITHDRAW",
-        "TRANSFER": "TRANSFER",
-        "INCOME": "INCOME",
-        "OUTCOMES": "OUTCOMES",
-        "COMMISSION": "COMMISSION",
-        "TAX": "TAX"
+        "OTHERS": "Прочее",
+        "DEPOSIT": "Ввод ДС",
+        "WITHDRAW": "Вывод ДС",
+        "INCOME": "Доход",
+        "COMMISSION": "Комиссия",
+        "TAX": "Налог",
+        "INHERITANCE": "Наследство",
+        "TRANSFER": "Перевод ДС",
+        "CONTRACT_TERMINATION": "Расторжение договора",
+        "OUTCOMES": "Расходы",
+        "FINE": "Штраф",
+        "LOAN": "Займ"
     }
 
     conn: Any
@@ -164,10 +170,10 @@ class Ingestor:
         return [
             Op( code=t["id"],
                 transDt=datetime.fromisoformat(t["timestamp"]),
-                opType=self.TRANS_OP_TYPES[t["category"]],
+                opType=t["category"],
                 symbol=t["symbol"],
                 quantity=noneable.apply(t.get("change_qty", {}).get("value"), Decimal),
-                amount=Decimal(t["change"]["units"]),
+                amount=Decimal(t["change"]["units"]) + Decimal(t["change"]["nanos"]) / 1000000000,
                 cur=t["change"]["currency_code"],
                 comment=t["transaction_name"])
             for t in data["transactions"]
